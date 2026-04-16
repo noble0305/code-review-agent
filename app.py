@@ -857,5 +857,52 @@ def browse_directory():
         return jsonify({'error': str(e)}), 500
 
 
+@app.route('/api/git/log', methods=['GET'])
+def git_log():
+    """获取项目最近的 git 提交记录。"""
+    import subprocess
+    project_path = request.args.get('path', '').strip()
+    if not project_path or not os.path.isdir(project_path):
+        return jsonify({'error': '目录不存在'}), 400
+    count = request.args.get('count', 20, type=int)
+
+    try:
+        result = subprocess.run(
+            ['git', 'log', f'-{count}', '--pretty=format:%H|%h|%s|%an|%ar'],
+            cwd=project_path, capture_output=True, text=True, timeout=10
+        )
+        if result.returncode != 0:
+            return jsonify({'error': '不是 git 仓库', 'is_git': False})
+
+        commits = []
+        for line in result.stdout.strip().split('\n'):
+            if not line.strip():
+                continue
+            parts = line.split('|', 4)
+            if len(parts) == 5:
+                commits.append({
+                    'hash': parts[0],
+                    'short_hash': parts[1],
+                    'message': parts[2],
+                    'author': parts[3],
+                    'date': parts[4],
+                })
+
+        # 获取分支列表
+        branch_result = subprocess.run(
+            ['git', 'branch', '-a', '--format=%(refname:short)'],
+            cwd=project_path, capture_output=True, text=True, timeout=5
+        )
+        branches = [b.strip() for b in branch_result.stdout.strip().split('\n') if b.strip()] if branch_result.returncode == 0 else []
+
+        return jsonify({'is_git': True, 'commits': commits, 'branches': branches})
+    except FileNotFoundError:
+        return jsonify({'error': 'git 未安装', 'is_git': False})
+    except subprocess.TimeoutExpired:
+        return jsonify({'error': 'git 命令超时', 'is_git': False})
+    except Exception as e:
+        return jsonify({'error': str(e), 'is_git': False})
+
+
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5001, debug=True)

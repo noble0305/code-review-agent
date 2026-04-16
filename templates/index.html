@@ -258,19 +258,29 @@ button:disabled { background: #21262d; color: var(--text-muted); cursor: not-all
       </select>
       <select id="analysisMode" onchange="onModeChange()" style="padding:10px 12px;background:var(--surface);border:1px solid var(--border);border-radius:6px;color:var(--text);font-size:14px;cursor:pointer;">
         <option value="full">📊 全量分析</option>
-        <option value="diff">🔀 最近提交 (Diff)</option>
+        <option value="diff">🔀 选择提交分析</option>
         <option value="diff-custom">🔀 自定义对比</option>
       </select>
       <button id="analyzeBtn" onclick="startAnalysis()">开始审查</button>
     </div>
 
-    <!-- Diff 参数行（自定义对比时显示） -->
-    <div id="diffParams" style="display:none;padding:4px 0 12px;gap:8px;align-items:center;">
-      <span style="font-size:13px;color:var(--text-secondary);">对比范围：</span>
-      <input type="text" id="diffBase" placeholder="基准 (如 HEAD~3 或 main)" style="padding:6px 10px;background:var(--surface);border:1px solid var(--border);border-radius:6px;color:var(--text);font-size:13px;width:160px;" value="HEAD~1" />
-      <span style="color:var(--text-secondary);">→</span>
-      <input type="text" id="diffHead" placeholder="目标 (如 HEAD 或 dev)" style="padding:6px 10px;background:var(--surface);border:1px solid var(--border);border-radius:6px;color:var(--text);font-size:13px;width:160px;" value="HEAD" />
-      <span style="font-size:12px;color:var(--text-secondary);margin-left:4px;">仅分析两次提交之间变更的文件</span>
+    <!-- Diff 参数行 -->
+    <div id="diffParams" style="display:none;padding:4px 0 12px;">
+      <!-- 选择提交模式 -->
+      <div id="commitPicker" style="display:none;margin-bottom:8px;">
+        <div style="font-size:13px;color:var(--text-secondary);margin-bottom:6px;">选择要分析的提交：</div>
+        <div id="commitList" style="max-height:240px;overflow-y:auto;border:1px solid var(--border);border-radius:8px;background:var(--surface);">
+          <div style="text-align:center;padding:20px;color:var(--text-secondary);">选择项目目录后自动加载...</div>
+        </div>
+      </div>
+      <!-- 自定义对比模式 -->
+      <div id="customDiffInputs" style="display:none;gap:8px;align-items:center;">
+        <span style="font-size:13px;color:var(--text-secondary);">对比范围：</span>
+        <input type="text" id="diffBase" placeholder="基准 (如 HEAD~3 或 main)" style="padding:6px 10px;background:var(--surface);border:1px solid var(--border);border-radius:6px;color:var(--text);font-size:13px;width:160px;" value="HEAD~1" />
+        <span style="color:var(--text-secondary);">→</span>
+        <input type="text" id="diffHead" placeholder="目标 (如 HEAD 或 dev)" style="padding:6px 10px;background:var(--surface);border:1px solid var(--border);border-radius:6px;color:var(--text);font-size:13px;width:160px;" value="HEAD" />
+        <span style="font-size:12px;color:var(--text-secondary);margin-left:4px;">仅分析两次提交之间变更的文件</span>
+      </div>
     </div>
 
     <!-- 目录浏览弹窗 -->
@@ -367,7 +377,71 @@ button:disabled { background: #21262d; color: var(--text-muted); cursor: not-all
 
     function onModeChange() {
       const mode = document.getElementById('analysisMode').value;
-      document.getElementById('diffParams').style.display = (mode === 'diff-custom') ? 'flex' : 'none';
+      const diffParams = document.getElementById('diffParams');
+      const commitPicker = document.getElementById('commitPicker');
+      const customDiff = document.getElementById('customDiffInputs');
+
+      diffParams.style.display = (mode !== 'full') ? 'block' : 'none';
+      commitPicker.style.display = (mode === 'diff') ? 'block' : 'none';
+      customDiff.style.display = (mode === 'diff-custom') ? 'flex' : 'none';
+
+      if (mode === 'diff') {
+        loadCommits();
+      }
+    }
+
+    let selectedCommit = null;
+
+    async function loadCommits() {
+      const path = document.getElementById('projectPath').value.trim();
+      if (!path) {
+        document.getElementById('commitList').innerHTML = '<div style="text-align:center;padding:20px;color:var(--text-secondary);">请先输入或选择项目目录</div>';
+        return;
+      }
+      document.getElementById('commitList').innerHTML = '<div style="text-align:center;padding:20px;color:var(--text-secondary);">加载中...</div>';
+
+      try {
+        const resp = await fetch('/api/git/log?path=' + encodeURIComponent(path) + '&count=20');
+        const data = await resp.json();
+        if (!data.is_git) {
+          document.getElementById('commitList').innerHTML = '<div style="text-align:center;padding:20px;color:#f85149;">' + (data.error || '不是 git 仓库') + '</div>';
+          return;
+        }
+        if (!data.commits || !data.commits.length) {
+          document.getElementById('commitList').innerHTML = '<div style="text-align:center;padding:20px;color:var(--text-secondary);">没有提交记录</div>';
+          return;
+        }
+
+        selectedCommit = null;
+        let html = '';
+        data.commits.forEach((c, idx) => {
+          const isFirst = idx === 0;
+          html += `<div class="commit-item" data-hash="${c.hash}" data-parent="${c.hash}" onclick="selectCommit(this)" style="padding:10px 14px;cursor:pointer;border-bottom:1px solid var(--border);transition:background .15s;" onmouseover="this.style.background='var(--hover)'" onmouseout="this.style.background='transparent'">
+            <div style="display:flex;align-items:center;gap:8px;">
+              <span style="font-family:monospace;font-size:12px;color:var(--primary);background:rgba(99,102,241,0.1);padding:2px 6px;border-radius:4px;">${c.short_hash}</span>
+              <span style="font-size:13px;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${escapeHtml(c.message)}</span>
+            </div>
+            <div style="font-size:11px;color:var(--text-secondary);margin-top:4px;margin-left:62px;">
+              ${escapeHtml(c.author)} · ${escapeHtml(c.date)}
+            </div>
+          </div>`;
+        });
+        document.getElementById('commitList').innerHTML = html;
+      } catch (e) {
+        document.getElementById('commitList').innerHTML = '<div style="text-align:center;padding:20px;color:#f85149;">加载失败: ' + e.message + '</div>';
+      }
+    }
+
+    function selectCommit(el) {
+      // 取消之前的选中
+      document.querySelectorAll('.commit-item').forEach(e => {
+        e.style.background = 'transparent';
+        e.style.borderLeft = 'none';
+      });
+      // 高亮当前选中
+      el.style.background = 'var(--hover)';
+      el.style.borderLeft = '3px solid var(--primary)';
+      selectedCommit = el.dataset.hash;
     }
 
     function getAnalysisPayload(path, lang) {
@@ -375,8 +449,15 @@ button:disabled { background: #21262d; color: var(--text-muted); cursor: not-all
       const payload = { path, language: lang };
       if (mode === 'diff') {
         payload.mode = 'diff';
-        payload.base = 'HEAD~1';
-        payload.head = 'HEAD';
+        if (selectedCommit) {
+          // 分析选定 commit 引入的变更（该 commit 与其父 commit 的 diff）
+          payload.base = selectedCommit + '~1';
+          payload.head = selectedCommit;
+        } else {
+          // 默认最近一次提交
+          payload.base = 'HEAD~1';
+          payload.head = 'HEAD';
+        }
       } else if (mode === 'diff-custom') {
         payload.mode = 'diff';
         payload.base = document.getElementById('diffBase').value.trim() || 'HEAD~1';
