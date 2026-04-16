@@ -4,6 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>代码审查智能体</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 <style>
 * { margin: 0; padding: 0; box-sizing: border-box; }
 :root {
@@ -211,6 +212,12 @@ button:disabled { background: #21262d; color: var(--text-muted); cursor: not-all
     <h1>🔍 代码审查智能体</h1>
     <p class="subtitle">基于静态分析的多语言代码质量检测工具，支持 Python / JavaScript / Java / Go</p>
 
+    <div class="tab-nav" style="display:flex;gap:0;margin-bottom:20px;border-bottom:1px solid var(--border);">
+      <button class="tab-btn active" onclick="switchTab('analysis')" id="tabAnalysis" style="padding:10px 20px;background:none;border:none;border-bottom:2px solid var(--accent);color:var(--text);font-size:14px;cursor:pointer;">🔍 代码审查</button>
+      <button class="tab-btn" onclick="switchTab('history')" id="tabHistory" style="padding:10px 20px;background:none;border:none;border-bottom:2px solid transparent;color:var(--text-muted);font-size:14px;cursor:pointer;">📈 历史趋势</button>
+    </div>
+
+    <div id="panelAnalysis">
     <!-- LLM Status -->
     <div class="llm-status" id="llmStatus">
       <span class="status-dot"></span>
@@ -273,6 +280,24 @@ button:disabled { background: #21262d; color: var(--text-muted); cursor: not-all
         <h3 style="font-size:15px;margin-bottom:10px;color:var(--text-muted);">🔧 分析引擎</h3>
         <div id="toolsStatusContent"></div>
       </div>
+
+      <div style="margin-top:20px;display:flex;gap:12px;" id="exportButtons" style="display:none;">
+        <button onclick="exportReport('markdown')" style="background:#21262d;border:1px solid var(--border);">📄 导出 Markdown</button>
+        <button onclick="exportReport('html')" style="background:#21262d;border:1px solid var(--border);">🌐 导出 HTML</button>
+      </div>
+    </div>
+    </div>
+
+    <div id="panelHistory" style="display:none;">
+      <h2 style="font-size:20px;margin-bottom:16px;">📈 历史趋势</h2>
+      <div style="display:flex;gap:12px;margin-bottom:20px;">
+        <input type="text" id="historyProjectFilter" placeholder="按项目路径筛选" style="flex:1;padding:10px 14px;background:var(--surface);border:1px solid var(--border);border-radius:6px;color:var(--text);font-size:14px;outline:none;" />
+        <button onclick="loadHistory()" style="padding:10px 20px;">加载</button>
+      </div>
+      <div style="position:relative;height:400px;background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:20px;">
+        <canvas id="trendChart"></canvas>
+      </div>
+      <div id="historyTable" style="margin-top:20px;"></div>
     </div>
   </div>
 
@@ -721,6 +746,124 @@ function clearChat() {
   document.getElementById('chatMessages').innerHTML =
     '<div class="chat-message system">对话已清空，有什么可以帮你的吗？</div>';
   chatHistory = [];
+}
+
+// History & Export functions
+let trendChart = null;
+let currentAnalysisId = null;
+
+function switchTab(tab) {
+  document.querySelectorAll('.tab-btn').forEach(b => {
+    b.style.borderBottomColor = 'transparent';
+    b.style.color = 'var(--text-muted)';
+    b.classList.remove('active');
+  });
+  document.getElementById('panelAnalysis').style.display = tab === 'analysis' ? '' : 'none';
+  document.getElementById('panelHistory').style.display = tab === 'history' ? '' : 'none';
+  const btn = tab === 'analysis' ? document.getElementById('tabAnalysis') : document.getElementById('tabHistory');
+  btn.style.borderBottomColor = 'var(--accent)';
+  btn.style.color = 'var(--text)';
+  btn.classList.add('active');
+  if (tab === 'history') loadHistory();
+}
+
+async function loadHistory() {
+  const filter = document.getElementById('historyProjectFilter').value.trim();
+  const params = new URLSearchParams({limit: '50'});
+  if (filter) params.set('project_path', filter);
+  
+  try {
+    const res = await fetch('/api/history?' + params);
+    const data = await res.json();
+    renderTrendChart(data);
+    renderHistoryTable(data);
+  } catch (e) {
+    document.getElementById('historyTable').innerHTML = '<p style="color:var(--red)">加载失败: ' + e.message + '</p>';
+  }
+}
+
+function renderTrendChart(records) {
+  const ctx = document.getElementById('trendChart').getContext('2d');
+  if (trendChart) trendChart.destroy();
+  
+  records = records.reverse();
+  const labels = records.map(r => (r.created_at || '').substring(0, 10));
+  const scores = records.map(r => r.total_score);
+  
+  trendChart = new Chart(ctx, {
+    type: 'line',
+    data: {
+      labels,
+      datasets: [{
+        label: '总分',
+        data: scores,
+        borderColor: '#58a6ff',
+        backgroundColor: 'rgba(88,166,255,0.1)',
+        fill: true,
+        tension: 0.3,
+      }]
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      scales: {
+        y: { beginAtZero: true, max: 100, grid: { color: '#30363d' }, ticks: { color: '#8b949e' } },
+        x: { grid: { color: '#30363d' }, ticks: { color: '#8b949e' } }
+      },
+      plugins: {
+        legend: { labels: { color: '#c9d1d9' } }
+      }
+    }
+  });
+}
+
+function renderHistoryTable(records) {
+  if (!records.length) {
+    document.getElementById('historyTable').innerHTML = '<p style="color:var(--text-muted);text-align:center;padding:20px;">暂无分析历史</p>';
+    return;
+  }
+  let html = '<table style="width:100%;border-collapse:collapse;font-size:13px;">';
+  html += '<tr style="border-bottom:1px solid var(--border);"><th style="padding:8px;text-align:left;color:var(--text-muted)">ID</th><th style="padding:8px;text-align:left;color:var(--text-muted)">分数</th><th style="padding:8px;text-align:left;color:var(--text-muted)">语言</th><th style="padding:8px;text-align:left;color:var(--text-muted)">文件</th><th style="padding:8px;text-align:left;color:var(--text-muted)">时间</th><th style="padding:8px;text-align:left;color:var(--text-muted)">操作</th></tr>';
+  for (const r of records) {
+    const color = r.total_score >= 80 ? 'var(--green)' : r.total_score >= 60 ? 'var(--yellow)' : 'var(--red)';
+    html += `<tr style="border-bottom:1px solid var(--border);"><td style="padding:8px">${r.id}</td><td style="padding:8px;color:${color}">${r.total_score.toFixed(1)}</td><td style="padding:8px">${r.language}</td><td style="padding:8px">${r.file_count}</td><td style="padding:8px;color:var(--text-muted)">${(r.created_at||'').substring(0,16)}</td><td style="padding:8px"><a href="#" onclick="viewAnalysis(${r.id});return false;" style="color:var(--accent)">查看</a> | <a href="/api/export/${r.id}?format=markdown" style="color:var(--accent)">导出</a></td></tr>`;
+  }
+  html += '</table>';
+  document.getElementById('historyTable').innerHTML = html;
+}
+
+async function viewAnalysis(id) {
+  const res = await fetch('/api/history/' + id);
+  const data = await res.json();
+  if (data.error) { alert(data.error); return; }
+  currentAnalysisId = id;
+  // Switch to analysis tab and show the result
+  switchTab('analysis');
+  // Convert stored format back to display format
+  const displayData = {
+    total_score: data.total_score,
+    file_count: data.file_count,
+    total_lines: data.total_lines,
+    language: data.language,
+    dimensions: (data.dimensions || []).map(d => ({
+      name: d.name, score: d.score || d.score, weight: d.weight,
+      details: d.details || '', issues: d.issues || []
+    })),
+    all_issues: (data.dimensions || []).flatMap(d => (d.issues || []).map(i => ({
+      ...i, icon: {'critical':'🔴','warning':'🟡','info':'🔵'}[i.severity]||'⚪'
+    }))),
+    tools_status: {},
+  };
+  renderResults(displayData);
+  document.getElementById('exportButtons').style.display = 'flex';
+}
+
+function exportReport(format) {
+  if (currentAnalysisId) {
+    window.open('/api/export/' + currentAnalysisId + '?format=' + format, '_blank');
+  } else {
+    alert('请先查看历史记录再导出');
+  }
 }
 
 // Initialize on load

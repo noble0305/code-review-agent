@@ -79,6 +79,24 @@ class Config:
             ]
         })
 
+    def get_notifier_config(self):
+        """Get notifier configuration."""
+        return self.get('notifier', {
+            'feishu': {
+                'webhook_url': '',
+                'enabled': False,
+            }
+        })
+
+    def get_rules_config(self):
+        """Get rules configuration."""
+        return self.get('rules', {
+            'ignore': [],
+            'thresholds': {},
+            'weights': {},
+            'severity_overrides': [],
+        })
+
 
 # Global config instance
 config = Config()

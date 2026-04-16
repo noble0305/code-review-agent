@@ -51,8 +51,17 @@ class BaseAnalyzer:
     MIN_COMMENT_RATIO = 0.10
     MAX_IMPORTS_WARNING = 20
     
-    def collect_files(self, project_path: str) -> List[str]:
-        """Collect all source files of the target language."""
+    def collect_files(self, project_path: str, file_list: List[str] = None) -> List[str]:
+        """Collect all source files of the target language.
+        
+        Args:
+            project_path: 项目根目录
+            file_list: 指定文件列表（如果提供，只分析这些文件）
+        """
+        if file_list:
+            # 过滤出匹配扩展名的文件
+            return [f for f in file_list if any(f.endswith(ext) for ext in self.FILE_EXTENSIONS) and os.path.isfile(f)]
+        
         skip_dirs = {'.git', 'node_modules', '__pycache__', 'venv', '.venv', 'env',
                      'dist', 'build', '.idea', '.vscode', 'vendor', 'target', 'bin', 'obj'}
         files = []
@@ -71,8 +80,13 @@ class BaseAnalyzer:
         except Exception as e:
             return [], str(e)
     
-    def analyze(self, project_path: str) -> AnalysisResult:
-        """Main entry point. Override in subclass."""
+    def analyze(self, project_path: str, file_list: List[str] = None) -> AnalysisResult:
+        """Main entry point. Override in subclass.
+        
+        Args:
+            project_path: 项目根目录
+            file_list: 指定文件列表（增量分析 / diff 模式）
+        """
         raise NotImplementedError
     
     def compute_total_score(self, dimensions: List[DimensionScore]) -> float:

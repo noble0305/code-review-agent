@@ -1,0 +1,44 @@
+#!/bin/bash
+# Code Review Agent - pre-commit hook
+# 分析暂存文件，分数低于阈值则阻止提交
+
+set -e
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+PROJECT_DIR="$(git rev-parse --show-toplevel)"
+CLI="$SCRIPT_DIR/../scripts/cli.py"
+
+# 配置：最低分数阈值
+THRESHOLD="${REVIEW_THRESHOLD:-60}"
+
+# 获取暂存文件
+STAGED=$(git diff --cached --name-only --diff-filter=ACMR | head -50)
+if [ -z "$STAGED" ]; then
+    exit 0
+fi
+
+echo "🔍 正在审查暂存文件..."
+
+# 检测语言
+LANG="python"
+if echo "$STAGED" | grep -qE '\.(js|ts|jsx|tsx)$'; then
+    LANG="javascript"
+elif echo "$STAGED" | grep -qE '\.java$'; then
+    LANG="java"
+elif echo "$STAGED" | grep -qE '\.go$'; then
+    LANG="go"
+fi
+
+# 运行分析
+if [ -f "$CLI" ]; then
+    python3 "$CLI" analyze "$PROJECT_DIR" --lang "$LANG" --mode diff --threshold "$THRESHOLD" --output table 2>&1
+    exit_code=$?
+    if [ $exit_code -ne 0 ]; then
+        echo ""
+        echo "❌ 代码审查未通过（分数低于阈值 $THRESHOLD）"
+        echo "如需跳过，使用: git commit --no-verify"
+        exit 1
+    fi
+fi
+
+exit 0

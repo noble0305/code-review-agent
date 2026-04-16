@@ -1,6 +1,7 @@
 """Flask application for code review agent."""
 import os
 import json
+import threading
 from flask import Flask, render_template, request, jsonify, Response, stream_with_context
 from analyzer import get_analyzer
 from analyzer.tools import is_tool_available, get_tool_version
@@ -12,54 +13,104 @@ from analyzer.prompts import (
     PROMPT_CHAT,
     PROMPT_EXPLAIN
 )
+from analyzer.git_diff import get_changed_files
+from analyzer.tasks import task_manager
+from analyzer.export import export_markdown, export_html
+from notifier.feishu import send_analysis_result
 
 app = Flask(__name__)
 
 
-@app.route('/')
-def index():
-    return render_template('index.html')
+def create_app():
+    """应用工厂函数。"""
+    return app
 
 
-@app.route('/api/tools', methods=['GET'])
-def api_tools():
-    """Return available analysis tools and their status."""
-    tools = {}
-    for tool in ['ruff', 'semgrep']:
-        avail = is_tool_available(tool)
-        tools[tool] = {
-            'available': avail,
-            'version': get_tool_version(tool) if avail else None,
-        }
-    return jsonify(tools)
+def _handle_mode_params(data, project_path, language, analyzer):
+    """处理分析模式参数，返回 file_list 或 None（降级全量），或抛出提前返回。"""
+    mode = data.get('mode', 'full')
+    base = data.get('base', 'HEAD~1')
+    head = data.get('head', 'HEAD')
+    incremental = data.get('incremental', False)
+    file_list = None
+    
+    if mode in ('diff', 'pr'):
+        file_list = get_changed_files(project_path, base, head)
+        if file_list is None:
+            # 不是 git 仓库，降级到全量
+            pass
+        elif not file_list:
+            return 'empty', None
+    elif mode == 'full' and incremental:
+        # 增量分析
+        from analyzer.storage import get_changed_files_since_last, compute_file_md5
+        all_files = analyzer.collect_files(project_path)
+        current_hashes = {f: compute_file_md5(f) for f in all_files}
+        changed = get_changed_files_since_last(project_path, current_hashes)
+        if changed is not None:
+            file_list = changed if changed else []
+            if not file_list:
+                # 没有变更，返回上次结果
+                from analyzer.storage import list_analyses
+                last = list_analyses(limit=1, project_path=project_path)
+                if last:
+                    from analyzer.storage import get_analysis
+                    last_detail = get_analysis(last[0]['id'])
+                    if last_detail:
+                        return 'cached', last_detail
+    
+    return 'ok', file_list
 
 
-@app.route('/api/analyze', methods=['POST'])
-def analyze():
-    """Original analyze endpoint - backward compatible."""
-    data = request.get_json()
-    project_path = data.get('path', '').strip()
-    language = data.get('language', 'python')
-
-    if not project_path:
-        return jsonify({'error': '请输入项目目录路径'}), 400
-
-    if not os.path.isdir(project_path):
-        return jsonify({'error': f'目录不存在: {project_path}'}), 400
-
-    analyzer = get_analyzer(language)
-    if not analyzer:
-        return jsonify({'error': f'不支持的语言: {language}'}), 400
-
+def _save_analysis_to_db(project_path, language, result):
+    """保存分析结果到数据库。"""
     try:
-        result = analyzer.analyze(project_path)
-    except Exception as e:
-        return jsonify({'error': f'分析出错: {str(e)}'}), 500
+        from analyzer.storage import save_analysis, save_file_hashes, compute_file_md5, init_db
+        init_db()
+        result_dict = {
+            'total_score': result.total_score,
+            'file_count': result.file_count,
+            'total_lines': result.total_lines,
+            'dimensions': [{'name': d.name, 'score': d.score, 'weight': d.weight, 'details': d.details,
+                           'issues': [{'severity': i.severity, 'file': os.path.relpath(i.file_path, project_path),
+                                      'line': i.line_number, 'description': i.description} for i in d.issues]}
+                          for d in result.dimensions]
+        }
+        aid = save_analysis(project_path, language, result_dict)
+        # 保存文件哈希
+        hashes = {f: compute_file_md5(f) for f in result.analyzed_files}
+        save_file_hashes(aid, project_path, hashes)
+    except Exception:
+        pass
 
-    # Get tool status from analyzer
-    tools_status = getattr(analyzer, 'tools_status', {})
 
-    return jsonify({
+def _notify_webhooks(response_data):
+    """异步发送 webhook 通知。"""
+    try:
+        from analyzer.storage import list_webhooks, init_db
+        init_db()
+        webhooks = list_webhooks()
+        if webhooks:
+            def _notify():
+                import urllib.request
+                for wh in webhooks:
+                    try:
+                        req = urllib.request.Request(
+                            wh['url'],
+                            data=json.dumps(response_data, ensure_ascii=False).encode('utf-8'),
+                            headers={'Content-Type': 'application/json'}
+                        )
+                        urllib.request.urlopen(req, timeout=10)
+                    except Exception:
+                        pass
+            threading.Thread(target=_notify, daemon=True).start()
+    except Exception:
+        pass
+
+
+def _build_response_data(result, project_path, tools_status):
+    """构建分析响应数据。"""
+    return {
         'total_score': result.total_score,
         'language': result.language,
         'file_count': result.file_count,
@@ -99,7 +150,70 @@ def analyze():
             }
             for iss in result.all_issues
         ]
-    })
+    }
+
+
+@app.route('/')
+def index():
+    return render_template('index.html')
+
+
+@app.route('/api/tools', methods=['GET'])
+def api_tools():
+    """Return available analysis tools and their status."""
+    tools = {}
+    for tool in ['ruff', 'semgrep']:
+        avail = is_tool_available(tool)
+        tools[tool] = {
+            'available': avail,
+            'version': get_tool_version(tool) if avail else None,
+        }
+    return jsonify(tools)
+
+
+@app.route('/api/analyze', methods=['POST'])
+def analyze():
+    """Original analyze endpoint - backward compatible."""
+    data = request.get_json()
+    project_path = data.get('path', '').strip()
+    language = data.get('language', 'python')
+
+    if not project_path:
+        return jsonify({'error': '请输入项目目录路径'}), 400
+
+    if not os.path.isdir(project_path):
+        return jsonify({'error': f'目录不存在: {project_path}'}), 400
+
+    analyzer = get_analyzer(language)
+    if not analyzer:
+        return jsonify({'error': f'不支持的语言: {language}'}), 400
+
+    # 处理分析模式
+    status, file_list_or_data = _handle_mode_params(data, project_path, language, analyzer)
+    if status == 'empty':
+        return jsonify({'total_score': 100, 'language': language, 'file_count': 0,
+                      'total_lines': 0, 'dimensions': [], 'all_issues': [],
+                      'analyzed_files': [], 'tools_status': {}})
+    elif status == 'cached':
+        return jsonify(file_list_or_data)
+    file_list = file_list_or_data
+
+    try:
+        result = analyzer.analyze(project_path, file_list=file_list)
+    except Exception as e:
+        return jsonify({'error': f'分析出错: {str(e)}'}), 500
+
+    # Get tool status from analyzer
+    tools_status = getattr(analyzer, 'tools_status', {})
+    response_data = _build_response_data(result, project_path, tools_status)
+
+    # 保存到数据库
+    _save_analysis_to_db(project_path, language, result)
+
+    # 异步发送 webhook 通知
+    _notify_webhooks(response_data)
+
+    return jsonify(response_data)
 
 
 @app.route('/api/llm/status', methods=['GET'])
@@ -130,8 +244,18 @@ def analyze_enhanced():
     if not analyzer:
         return jsonify({'error': f'不支持的语言: {language}'}), 400
 
+    # 处理分析模式
+    status, file_list_or_data = _handle_mode_params(data, project_path, language, analyzer)
+    if status == 'empty':
+        return jsonify({'total_score': 100, 'language': language, 'file_count': 0,
+                      'total_lines': 0, 'dimensions': [], 'all_issues': [],
+                      'analyzed_files': [], 'tools_status': {}})
+    elif status == 'cached':
+        return jsonify(file_list_or_data)
+    file_list = file_list_or_data
+
     try:
-        result = analyzer.analyze(project_path)
+        result = analyzer.analyze(project_path, file_list=file_list)
     except Exception as e:
         return jsonify({'error': f'分析出错: {str(e)}'}), 500
 
@@ -201,7 +325,7 @@ def analyze_enhanced():
         except Exception:
             pass
 
-    return jsonify({
+    response_data = {
         'total_score': result.total_score,
         'language': result.language,
         'file_count': result.file_count,
@@ -244,7 +368,15 @@ def analyze_enhanced():
             }
             for iss in result.all_issues
         ]
-    })
+    }
+
+    # 保存到数据库
+    _save_analysis_to_db(project_path, language, result)
+
+    # 异步发送 webhook 通知
+    _notify_webhooks(response_data)
+
+    return jsonify(response_data)
 
 
 @app.route('/api/analyze/stream', methods=['POST'])
@@ -272,47 +404,7 @@ def analyze_stream():
             result = analyzer.analyze(project_path)
             tools_status = getattr(analyzer, 'tools_status', {})
 
-            yield f"data: {json.dumps({'step': 'rules', 'status': 'completed', 'result': {
-                'total_score': result.total_score,
-                'language': result.language,
-                'file_count': result.file_count,
-                'total_lines': result.total_lines,
-                'tools_status': tools_status,
-                'analyzed_files': [os.path.relpath(f, project_path) for f in result.analyzed_files],
-                'dimensions': [
-                    {
-                        'name': d.name,
-                        'score': round(d.score, 1),
-                        'weight': d.weight,
-                        'details': d.details,
-                        'issues': [
-                            {
-                                'severity': iss.severity,
-                                'icon': {'critical': '🔴', 'warning': '🟡', 'info': '🔵'}.get(iss.severity, '⚪'),
-                                'file': os.path.relpath(iss.file_path, project_path) if iss.file_path else '',
-                                'line': iss.line_number,
-                                'description': iss.description,
-                                'suggestion': iss.suggestion,
-                                'metric': iss.metric,
-                            }
-                            for iss in d.issues
-                        ]
-                    }
-                    for d in result.dimensions
-                ],
-                'all_issues': [
-                    {
-                        'severity': iss.severity,
-                        'icon': {'critical': '🔴', 'warning': '🟡', 'info': '🔵'}.get(iss.severity, '⚪'),
-                        'file': os.path.relpath(iss.file_path, project_path) if iss.file_path else '',
-                        'line': iss.line_number,
-                        'description': iss.description,
-                        'suggestion': iss.suggestion,
-                        'metric': iss.metric,
-                    }
-                    for iss in result.all_issues
-                ]
-            }})}\n\n"
+            yield f"data: {json.dumps({'step': 'rules', 'status': 'completed', 'result': _build_response_data(result, project_path, tools_status)})}\n\n"
 
             # Step 2: LLM summary
             llm = get_llm_client()
@@ -445,6 +537,143 @@ def explain_issue():
         })
     except Exception as e:
         return jsonify({'error': f'LLM 调用出错: {str(e)}'}), 500
+
+
+@app.route('/api/history', methods=['GET'])
+def api_history():
+    """分析历史列表。"""
+    from analyzer.storage import list_analyses, init_db
+    init_db()
+    limit = request.args.get('limit', 50, type=int)
+    project_path = request.args.get('project_path')
+    records = list_analyses(limit=limit, project_path=project_path)
+    return jsonify(records)
+
+
+@app.route('/api/history/<int:analysis_id>', methods=['GET'])
+def api_history_detail(analysis_id):
+    """单次分析详情。"""
+    from analyzer.storage import get_analysis, init_db
+    init_db()
+    record = get_analysis(analysis_id)
+    if not record:
+        return jsonify({'error': '记录不存在'}), 404
+    return jsonify(record)
+
+
+@app.route('/api/history/compare', methods=['GET'])
+def api_history_compare():
+    """对比两次分析。"""
+    from analyzer.storage import compare_analyses, init_db
+    init_db()
+    id1 = request.args.get('id1', type=int)
+    id2 = request.args.get('id2', type=int)
+    if not id1 or not id2:
+        return jsonify({'error': '请提供 id1 和 id2 参数'}), 400
+    result = compare_analyses(id1, id2)
+    if not result:
+        return jsonify({'error': '记录不存在'}), 404
+    return jsonify(result)
+
+
+@app.route('/api/analyze/async', methods=['POST'])
+def analyze_async():
+    """提交异步分析任务。"""
+    data = request.get_json()
+    
+    def run_analysis(path=data.get('path', ''), language=data.get('language', 'python')):
+        analyzer = get_analyzer(language)
+        if not analyzer:
+            raise ValueError(f'不支持的语言: {language}')
+        return analyzer.analyze(path)
+    
+    task_id = task_manager.submit(run_analysis)
+    return jsonify({'task_id': task_id})
+
+
+@app.route('/api/task/<task_id>', methods=['GET'])
+def api_task_status(task_id):
+    """查询任务状态。"""
+    task = task_manager.get_task(task_id)
+    if not task:
+        return jsonify({'error': '任务不存在'}), 404
+    return jsonify(task)
+
+
+@app.route('/api/tasks', methods=['GET'])
+def api_tasks():
+    """列出所有任务。"""
+    return jsonify(task_manager.list_tasks())
+
+
+@app.route('/api/export/<int:analysis_id>', methods=['GET'])
+def api_export(analysis_id):
+    """导出报告。"""
+    from analyzer.storage import get_analysis, init_db
+    init_db()
+    record = get_analysis(analysis_id)
+    if not record:
+        return jsonify({'error': '记录不存在'}), 404
+    
+    fmt = request.args.get('format', 'markdown')
+    if fmt == 'html':
+        content = export_html(record)
+        return Response(content, mimetype='text/html; charset=utf-8')
+    else:
+        content = export_markdown(record)
+        return Response(content, mimetype='text/markdown; charset=utf-8')
+
+
+@app.route('/api/notify', methods=['POST'])
+def api_notify():
+    """手动触发飞书通知。"""
+    data = request.get_json()
+    webhook_url = data.get('webhook_url', '')
+    analysis_result = data.get('analysis_result', {})
+    
+    if not webhook_url:
+        # 尝试从配置读取
+        from config import config
+        webhook_url = config.get('notifier.feishu.webhook_url', '')
+    
+    if not webhook_url:
+        return jsonify({'error': '未配置飞书 webhook URL'}), 400
+    
+    success = send_analysis_result(webhook_url, analysis_result)
+    if success:
+        return jsonify({'status': 'ok'})
+    return jsonify({'error': '发送失败'}), 500
+
+
+@app.route('/api/webhook/register', methods=['POST'])
+def api_webhook_register():
+    """注册 webhook。"""
+    data = request.get_json()
+    url = data.get('url', '').strip()
+    if not url:
+        return jsonify({'error': '请提供 webhook URL'}), 400
+    from analyzer.storage import register_webhook, init_db
+    init_db()
+    wid = register_webhook(url, data.get('description', ''))
+    return jsonify({'id': wid, 'url': url})
+
+
+@app.route('/api/webhook/<int:webhook_id>', methods=['DELETE'])
+def api_webhook_delete(webhook_id):
+    """删除 webhook。"""
+    from analyzer.storage import delete_webhook, init_db
+    init_db()
+    if delete_webhook(webhook_id):
+        return jsonify({'status': 'ok'})
+    return jsonify({'error': 'webhook 不存在'}), 404
+
+
+@app.route('/api/webhook', methods=['GET'])
+def api_webhook_list():
+    """列出 webhooks。"""
+    from analyzer.storage import list_webhooks, init_db
+    init_db()
+    return jsonify(list_webhooks())
 
 
 if __name__ == '__main__':
