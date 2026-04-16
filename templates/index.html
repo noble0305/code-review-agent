@@ -1,0 +1,321 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>代码审查智能体</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+:root {
+  --bg: #0d1117; --surface: #161b22; --border: #30363d; --text: #c9d1d9;
+  --text-muted: #8b949e; --accent: #58a6ff; --green: #3fb950; --yellow: #d29922;
+  --red: #f85149; --purple: #bc8cff;
+}
+body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif; background: var(--bg); color: var(--text); line-height: 1.6; min-height: 100vh; }
+.container { max-width: 1100px; margin: 0 auto; padding: 40px 20px; }
+h1 { font-size: 28px; margin-bottom: 8px; color: #f0f6fc; }
+.subtitle { color: var(--text-muted); margin-bottom: 32px; font-size: 15px; }
+.input-group { display: flex; gap: 12px; margin-bottom: 16px; flex-wrap: wrap; }
+.input-group input[type="text"] {
+  flex: 1; min-width: 300px; padding: 10px 14px; background: var(--surface);
+  border: 1px solid var(--border); border-radius: 6px; color: var(--text);
+  font-size: 14px; outline: none;
+}
+.input-group input[type="text"]:focus { border-color: var(--accent); }
+select {
+  padding: 10px 14px; background: var(--surface); border: 1px solid var(--border);
+  border-radius: 6px; color: var(--text); font-size: 14px; cursor: pointer; outline: none;
+}
+select:focus { border-color: var(--accent); }
+button {
+  padding: 10px 24px; background: #238636; color: #fff; border: none; border-radius: 6px;
+  font-size: 14px; font-weight: 600; cursor: pointer; transition: background .2s;
+}
+button:hover { background: #2ea043; }
+button:disabled { background: #21262d; color: var(--text-muted); cursor: not-allowed; }
+.progress { display: none; margin: 20px 0; }
+.progress-bar { height: 4px; background: var(--surface); border-radius: 2px; overflow: hidden; }
+.progress-fill { height: 100%; background: var(--accent); width: 0%; transition: width .3s; }
+.progress-text { color: var(--text-muted); font-size: 13px; margin-top: 6px; }
+.error-msg { color: var(--red); margin: 16px 0; font-size: 14px; display: none; }
+
+/* Results */
+.results { display: none; margin-top: 32px; }
+.score-section { display: flex; gap: 24px; margin-bottom: 32px; flex-wrap: wrap; align-items: flex-start; }
+.score-circle {
+  width: 140px; height: 140px; border-radius: 50%; display: flex; flex-direction: column;
+  align-items: center; justify-content: center; border: 4px solid var(--border);
+  flex-shrink: 0;
+}
+.score-number { font-size: 42px; font-weight: 700; }
+.score-label { font-size: 13px; color: var(--text-muted); }
+.summary-cards { display: flex; gap: 12px; flex-wrap: wrap; flex: 1; }
+.summary-card {
+  background: var(--surface); border: 1px solid var(--border); border-radius: 8px;
+  padding: 14px 18px; min-width: 120px;
+}
+.summary-card .label { font-size: 12px; color: var(--text-muted); }
+.summary-card .value { font-size: 22px; font-weight: 600; margin-top: 4px; }
+
+.dimensions { margin-bottom: 32px; }
+.dim-item { margin-bottom: 16px; }
+.dim-header { display: flex; justify-content: space-between; margin-bottom: 6px; font-size: 14px; }
+.dim-name { font-weight: 600; }
+.dim-score { color: var(--text-muted); }
+.dim-bar { height: 8px; background: var(--surface); border-radius: 4px; overflow: hidden; }
+.dim-fill { height: 100%; border-radius: 4px; transition: width .5s ease; }
+.dim-details { font-size: 12px; color: var(--text-muted); margin-top: 4px; }
+
+.issues-section h2 { font-size: 20px; margin-bottom: 16px; }
+.filters { display: flex; gap: 8px; margin-bottom: 16px; flex-wrap: wrap; }
+.filter-btn {
+  padding: 5px 14px; background: var(--surface); border: 1px solid var(--border);
+  border-radius: 20px; color: var(--text-muted); font-size: 13px; cursor: pointer;
+}
+.filter-btn.active { background: var(--accent); color: #fff; border-color: var(--accent); }
+.issue-list { list-style: none; }
+.issue-item {
+  background: var(--surface); border: 1px solid var(--border); border-radius: 8px;
+  padding: 14px 18px; margin-bottom: 10px; transition: border-color .2s;
+}
+.issue-item:hover { border-color: var(--text-muted); }
+.issue-header { display: flex; align-items: center; gap: 10px; margin-bottom: 6px; font-size: 14px; }
+.issue-file { color: var(--accent); font-family: 'SF Mono', Consolas, monospace; font-size: 13px; }
+.issue-desc { font-size: 14px; margin-bottom: 4px; }
+.issue-suggestion { font-size: 13px; color: var(--text-muted); }
+.issue-metric { font-size: 12px; color: var(--purple); margin-top: 4px; font-family: monospace; }
+.no-issues { color: var(--text-muted); text-align: center; padding: 40px; font-size: 15px; }
+
+@media (max-width: 600px) {
+  .score-section { flex-direction: column; align-items: center; }
+  .input-group { flex-direction: column; }
+  .input-group input[type="text"] { min-width: unset; }
+}
+</style>
+</head>
+<body>
+<div class="container">
+  <h1>🔍 代码审查智能体</h1>
+  <p class="subtitle">基于静态分析的多语言代码质量检测工具，支持 Python / JavaScript / Java / Go</p>
+
+  <div class="input-group">
+    <input type="text" id="projectPath" placeholder="输入项目目录路径，如 /home/user/my-project" />
+    <select id="language">
+      <option value="python">Python</option>
+      <option value="javascript">JavaScript / TypeScript</option>
+      <option value="java">Java</option>
+      <option value="go">Go</option>
+    </select>
+    <button id="analyzeBtn" onclick="startAnalysis()">开始审查</button>
+  </div>
+
+  <div class="progress" id="progress">
+    <div class="progress-bar"><div class="progress-fill" id="progressFill"></div></div>
+    <div class="progress-text" id="progressText">准备分析...</div>
+  </div>
+
+  <div class="error-msg" id="errorMsg"></div>
+
+  <div class="results" id="results">
+    <div class="score-section">
+      <div class="score-circle" id="scoreCircle">
+        <span class="score-number" id="totalScore">--</span>
+        <span class="score-label">总体评分</span>
+      </div>
+      <div class="summary-cards" id="summaryCards"></div>
+    </div>
+
+    <div class="dimensions" id="dimensionsSection">
+      <h2 style="font-size:20px;margin-bottom:16px;">📊 各维度评分</h2>
+      <div id="dimensionBars"></div>
+    </div>
+
+    <div class="issues-section">
+      <h2>📋 问题列表</h2>
+      <div class="filters" id="filters">
+        <button class="filter-btn active" data-filter="all" onclick="filterIssues('all', this)">全部</button>
+        <button class="filter-btn" data-filter="critical" onclick="filterIssues('critical', this)">🔴 严重</button>
+        <button class="filter-btn" data-filter="warning" onclick="filterIssues('warning', this)">🟡 警告</button>
+        <button class="filter-btn" data-filter="info" onclick="filterIssues('info', this)">🔵 建议</button>
+      </div>
+      <ul class="issue-list" id="issueList"></ul>
+    </div>
+
+    <div id="toolsStatus" style="margin-top:24px;padding:16px;background:var(--surface);border:1px solid var(--border);border-radius:8px;display:none;">
+      <h3 style="font-size:15px;margin-bottom:10px;color:var(--text-muted);">🔧 分析引擎</h3>
+      <div id="toolsStatusContent"></div>
+    </div>
+  </div>
+</div>
+
+<script>
+let allIssues = [];
+
+function startAnalysis() {
+  const path = document.getElementById('projectPath').value.trim();
+  const lang = document.getElementById('language').value;
+  const btn = document.getElementById('analyzeBtn');
+  const progress = document.getElementById('progress');
+  const errorMsg = document.getElementById('errorMsg');
+  const results = document.getElementById('results');
+
+  if (!path) { alert('请输入项目目录路径'); return; }
+
+  btn.disabled = true;
+  btn.textContent = '分析中...';
+  progress.style.display = 'block';
+  errorMsg.style.display = 'none';
+  results.style.display = 'none';
+
+  // Simulate progress
+  let pct = 0;
+  const steps = ['检测分析工具...', '扫描文件...', '分析代码复杂度...', '检测代码重复...', '检查命名规范...', '分析注释覆盖率...', '检测安全隐患...', '生成报告...'];
+  let stepIdx = 0;
+  const timer = setInterval(() => {
+    pct = Math.min(pct + Math.random() * 15, 90);
+    stepIdx = Math.min(Math.floor(pct / 15), steps.length - 1);
+    document.getElementById('progressFill').style.width = pct + '%';
+    document.getElementById('progressText').textContent = steps[stepIdx];
+  }, 300);
+
+  fetch('/api/analyze', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ path, language: lang })
+  })
+  .then(r => r.json())
+  .then(data => {
+    clearInterval(timer);
+    if (data.error) {
+      errorMsg.textContent = data.error;
+      errorMsg.style.display = 'block';
+      progress.style.display = 'none';
+      btn.disabled = false;
+      btn.textContent = '开始审查';
+      return;
+    }
+    document.getElementById('progressFill').style.width = '100%';
+    document.getElementById('progressText').textContent = '分析完成！';
+    setTimeout(() => {
+      progress.style.display = 'none';
+      btn.disabled = false;
+      btn.textContent = '开始审查';
+      renderResults(data);
+    }, 500);
+  })
+  .catch(err => {
+    clearInterval(timer);
+    errorMsg.textContent = '请求失败: ' + err.message;
+    errorMsg.style.display = 'block';
+    progress.style.display = 'none';
+    btn.disabled = false;
+    btn.textContent = '开始审查';
+  });
+}
+
+function scoreColor(score) {
+  if (score >= 80) return '#3fb950';
+  if (score >= 60) return '#d29922';
+  return '#f85149';
+}
+
+function renderResults(data) {
+  document.getElementById('results').style.display = 'block';
+  const score = data.total_score;
+  const color = scoreColor(score);
+
+  document.getElementById('totalScore').textContent = score;
+  document.getElementById('scoreCircle').style.borderColor = color;
+  document.getElementById('totalScore').style.color = color;
+
+  // Summary cards
+  const criticals = data.all_issues.filter(i => i.severity === 'critical').length;
+  const warnings = data.all_issues.filter(i => i.severity === 'warning').length;
+  const infos = data.all_issues.filter(i => i.severity === 'info').length;
+  document.getElementById('summaryCards').innerHTML = `
+    <div class="summary-card"><div class="label">分析文件数</div><div class="value">${data.file_count}</div></div>
+    <div class="summary-card"><div class="label">总代码行数</div><div class="value">${data.total_lines.toLocaleString()}</div></div>
+    <div class="summary-card"><div class="label">🔴 严重</div><div class="value" style="color:${criticals?'var(--red)':'var(--green)'}">${criticals}</div></div>
+    <div class="summary-card"><div class="label">🟡 警告</div><div class="value" style="color:${warnings?'var(--yellow)':'var(--green)'}">${warnings}</div></div>
+    <div class="summary-card"><div class="label">🔵 建议</div><div class="value">${infos}</div></div>
+  `;
+
+  // Dimension bars
+  const barsHtml = data.dimensions.map(d => {
+    const c = scoreColor(d.score);
+    return `<div class="dim-item">
+      <div class="dim-header">
+        <span class="dim-name">${d.name}</span>
+        <span class="dim-score" style="color:${c}">${d.score} 分</span>
+      </div>
+      <div class="dim-bar"><div class="dim-fill" style="width:${d.score}%;background:${c}"></div></div>
+      <div class="dim-details">${d.details} · ${d.issues.length} 个问题</div>
+    </div>`;
+  }).join('');
+  document.getElementById('dimensionBars').innerHTML = barsHtml;
+
+  // Issues
+  allIssues = data.all_issues;
+  renderIssues(allIssues);
+  
+  // Tools status
+  renderToolsStatus(data.tools_status);
+}
+
+function renderIssues(issues) {
+  const list = document.getElementById('issueList');
+  if (!issues.length) {
+    list.innerHTML = '<div class="no-issues">✅ 没有发现该级别的问题</div>';
+    return;
+  }
+  list.innerHTML = issues.map(i => `
+    <li class="issue-item" data-severity="${i.severity}">
+      <div class="issue-header">
+        <span>${i.icon}</span>
+        <span class="issue-file">${i.file}${i.line ? ':' + i.line : ''}</span>
+      </div>
+      <div class="issue-desc">${i.description}</div>
+      ${i.suggestion ? `<div class="issue-suggestion">💡 ${i.suggestion}</div>` : ''}
+      ${i.metric ? `<div class="issue-metric">${i.metric}</div>` : ''}
+    </li>
+  `).join('');
+}
+
+function filterIssues(severity, btn) {
+  document.querySelectorAll('.filter-btn').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+  if (severity === 'all') {
+    renderIssues(allIssues);
+  } else {
+    renderIssues(allIssues.filter(i => i.severity === severity));
+  }
+}
+
+function renderToolsStatus(tools_status) {
+  const container = document.getElementById('toolsStatus');
+  const content = document.getElementById('toolsStatusContent');
+  if (!tools_status || Object.keys(tools_status).length === 0) {
+    container.style.display = 'none';
+    return;
+  }
+  container.style.display = 'block';
+  const lines = [];
+  if (tools_status.ruff) {
+    const r = tools_status.ruff;
+    lines.push(r.available
+      ? `<span style="color:var(--green)">🐍 Ruff v${r.version || '?'}</span> <span style="color:var(--text-muted)">— 检测到 ${r.findings} 个问题</span>`
+      : `<span style="color:var(--yellow)">⚠️ Ruff 未安装，使用 AST 降级分析</span>`
+    );
+  }
+  if (tools_status.semgrep) {
+    const s = tools_status.semgrep;
+    lines.push(s.available
+      ? `<span style="color:var(--green)">🛡️ Semgrep v${s.version || '?'}</span> <span style="color:var(--text-muted)">— 检测到 ${s.findings} 个安全问题</span>`
+      : `<span style="color:var(--yellow)">⚠️ Semgrep 未安装，使用正则降级分析</span>`
+    );
+  }
+  content.innerHTML = lines.join('<br>');
+}
+</script>
+</body>
+</html>
