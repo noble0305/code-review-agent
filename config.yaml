@@ -1,0 +1,53 @@
+# LLM 配置
+llm:
+  # 服务商: openai / anthropic / ollama / zhipu / deepseek
+  provider: openai
+
+  # API Key（建议用环境变量 LLM_API_KEY）
+  # api_key: sk-xxx
+
+  # 自定义 Base URL（兼容 OpenAI 协议的服务都可用）
+  # base_url: https://api.deepseek.com/v1
+
+  # 模型名称
+  model: gpt-4o-mini
+
+  # 生成参数
+  max_tokens: 2048
+  temperature: 0.3
+
+  # 超时（秒）
+  timeout: 60
+
+  # 功能开关
+  features:
+    smart_suggestion: true    # 智能 issue 建议
+    overall_summary: true     # 整体评价
+    interactive_chat: true    # 交互式追问
+    code_explain: true        # 代码解释
+
+    # 成本控制
+    max_issues_to_enhance: 10  # 最多增强多少个 issue
+    context_lines: 10          # issue 上下文行数
+
+# 分析工具配置
+tools:
+  ruff:
+    timeout: 60
+  semgrep:
+    timeout: 60
+    config: auto
+
+# 项目配置
+project:
+  max_file_size: 500000       # 单文件最大 500KB
+  skip_dirs:
+    - .git
+    - node_modules
+    - __pycache__
+    - venv
+    - .venv
+    - dist
+    - build
+    - vendor
+    - target
