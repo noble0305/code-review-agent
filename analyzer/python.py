@@ -15,8 +15,8 @@ class PythonAnalyzer(BaseAnalyzer):
     # Tool status tracking
     tools_status = {}
     
-    def analyze(self, project_path: str) -> AnalysisResult:
-        files = self.collect_files(project_path)
+    def analyze(self, project_path: str, file_list=None) -> AnalysisResult:
+        files = self.collect_files(project_path, file_list=file_list)
         if not files:
             return AnalysisResult(language=self.LANGUAGE)
         

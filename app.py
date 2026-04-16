@@ -278,7 +278,7 @@ def analyze_enhanced():
             ])
             top_issues = '\n'.join([
                 f"- [{iss.severity}] {os.path.relpath(iss.file_path, project_path)}:{iss.line_number} - {iss.description}"
-                for iss in result.all_issues[:10]
+                for iss in result.all_issues[:5]
             ])
             summary_prompt = PROMPT_SUMMARY.format(
                 file_count=result.file_count,
@@ -294,7 +294,7 @@ def analyze_enhanced():
         # Generate smart suggestions for top issues
         try:
             context_lines = 10
-            for iss in result.all_issues[:10]:
+            for iss in result.all_issues[:3]:
                 if not iss.file_path or not os.path.exists(iss.file_path):
                     continue
                 try:
