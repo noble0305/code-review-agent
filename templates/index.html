@@ -149,6 +149,24 @@ button:disabled { background: #21262d; color: var(--text-muted); cursor: not-all
 .diff-line-add { background: rgba(63,185,80,0.15); display: block; }
 .diff-line-context { display: block; }
 .diff-empty { padding: 20px; text-align: center; color: var(--text-secondary); font-style: italic; }
+.tc-card { border:1px solid var(--border); border-radius:8px; margin-bottom:12px; overflow:hidden; transition:border-color .2s; }
+.tc-card:hover { border-color:var(--primary); }
+.tc-card-header { padding:10px 16px; display:flex; align-items:center; gap:10px; cursor:pointer; background:var(--surface); }
+.tc-card-body { padding:12px 16px; border-top:1px solid var(--border); }
+.tc-tag { padding:2px 8px; border-radius:4px; font-size:11px; font-weight:600; }
+.tc-tag-P0 { background:rgba(248,81,73,0.15); color:#f85149; }
+.tc-tag-P1 { background:rgba(210,153,34,0.15); color:#d29922; }
+.tc-tag-P2 { background:rgba(63,185,80,0.15); color:#3fb950; }
+.tc-tag-scope { background:rgba(99,102,241,0.12); color:var(--primary); }
+.tc-tag-type { background:rgba(139,148,158,0.12); color:var(--text-secondary); }
+.scope-badge { display:inline-flex; align-items:center; gap:4px; padding:4px 10px; border-radius:6px; font-size:12px; font-weight:500; margin:2px; }
+.scope-frontend { background:rgba(63,185,80,0.12); color:#3fb950; }
+.scope-backend { background:rgba(99,102,241,0.12); color:#818cf8; }
+.scope-database { background:rgba(210,153,34,0.12); color:#d29922; }
+.scope-config { background:rgba(139,148,158,0.12); color:#8b949e; }
+.tc-steps { counter-reset:step; list-style:none; padding:0; margin:8px 0; }
+.tc-steps li { counter-increment:step; padding:4px 0 4px 28px; position:relative; font-size:13px; }
+.tc-steps li::before { content:counter(step); position:absolute; left:0; width:20px; height:20px; border-radius:50%; background:var(--primary); color:#fff; font-size:11px; display:flex; align-items:center; justify-content:center; top:4px; }
 .issue-explanation {
   margin-top: 12px; padding: 12px; background: rgba(88, 166, 255, 0.1);
   border: 1px solid rgba(88, 166, 255, 0.2); border-radius: 6px;
@@ -512,9 +530,19 @@ button:disabled { background: #21262d; color: var(--text-muted); cursor: not-all
         <div id="toolsStatusContent"></div>
       </div>
 
-      <div style="margin-top:20px;display:flex;gap:12px;" id="exportButtons" style="display:none;">
-        <button onclick="exportReport('markdown')" style="background:#21262d;border:1px solid var(--border);">📄 导出 Markdown</button>
-        <button onclick="exportReport('html')" style="background:#21262d;border:1px solid var(--border);">🌐 导出 HTML</button>
+      <div style="margin-top:20px;display:flex;gap:12px;flex-wrap:wrap;" id="exportButtons">
+        <button onclick="exportReport('markdown')" style="background:#21262d;border:1px solid var(--border);padding:8px 16px;border-radius:6px;color:var(--text);cursor:pointer;">📄 导出 Markdown</button>
+        <button onclick="exportReport('html')" style="background:#21262d;border:1px solid var(--border);padding:8px 16px;border-radius:6px;color:var(--text);cursor:pointer;">🌐 导出 HTML</button>
+        <button id="testPlanBtn" onclick="generateTestPlan()" style="background:var(--primary);border:1px solid var(--primary);padding:8px 16px;border-radius:6px;color:#fff;cursor:pointer;font-weight:500;">🧪 生成测试计划</button>
+      </div>
+
+      <!-- 测试计划区域 -->
+      <div id="testPlanSection" style="display:none;margin-top:20px;border:1px solid var(--border);border-radius:12px;overflow:hidden;">
+        <div style="padding:14px 20px;background:var(--surface);display:flex;align-items:center;gap:8px;border-bottom:1px solid var(--border);">
+          <span style="font-size:16px;font-weight:600;">🧪 场景测试计划</span>
+          <span id="testPlanScope" style="font-size:12px;color:var(--text-secondary);"></span>
+        </div>
+        <div id="testPlanContent" style="padding:20px;"></div>
       </div>
     </div>
     </div>
@@ -1156,6 +1184,130 @@ async function viewAnalysis(id) {
   };
   renderResults(displayData);
   document.getElementById('exportButtons').style.display = 'flex';
+}
+
+function generateTestPlan() {
+  const path = document.getElementById('projectPath').value.trim();
+  if (!path) { alert('请先输入项目路径'); return; }
+
+  const btn = document.getElementById('testPlanBtn');
+  const section = document.getElementById('testPlanSection');
+  const content = document.getElementById('testPlanContent');
+  const scopeEl = document.getElementById('testPlanScope');
+
+  btn.disabled = true;
+  btn.textContent = '🧪 生成中...';
+  section.style.display = 'block';
+  content.innerHTML = '<div style="text-align:center;padding:40px;color:var(--text-secondary);">🤖 AI 正在分析改动范围并生成测试计划...</div>';
+
+  const payload = getAnalysisPayload(path, document.getElementById('language').value);
+  const base = payload.base || 'HEAD~1';
+  const head = payload.head || 'HEAD';
+
+  fetch('/api/test-plan', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      path: path,
+      base: base,
+      head: head,
+      tech_stack: ''
+    })
+  })
+  .then(r => r.json())
+  .then(data => {
+    btn.disabled = false;
+    btn.textContent = '🧪 生成测试计划';
+
+    if (data.error) {
+      content.innerHTML = '<div style="padding:20px;color:#f85149;text-align:center;">❌ ' + data.error + '</div>';
+      return;
+    }
+
+    let html = '';
+
+    // 改动概述
+    if (data.change_summary) {
+      html += '<div style="padding:12px 16px;background:var(--bg);border-radius:8px;margin-bottom:16px;font-size:14px;line-height:1.6;">📝 <b>改动概述</b>：' + escapeHtml(data.change_summary) + '</div>';
+    }
+
+    // 影响范围标签
+    const scopeSummary = data.scope_summary || {};
+    const scopeLabels = {frontend: '🖥️ 前端', backend: '⚙️ 后端', database: '🗄️ 数据库', config: '📋 配置'};
+    if (Object.keys(scopeSummary).length) {
+      html += '<div style="margin-bottom:16px;">';
+      for (const [k, v] of Object.entries(scopeSummary)) {
+        if (v > 0) {
+          html += '<span class="scope-badge scope-' + k + '">' + (scopeLabels[k] || k) + ' (' + v + ' 文件)</span>';
+        }
+      }
+      html += '</div>';
+    }
+
+    // 涉及模块
+    if (data.affected_modules && data.affected_modules.length) {
+      html += '<div style="margin-bottom:16px;font-size:13px;color:var(--text-secondary);">📦 涉及模块：' + data.affected_modules.map(m => '<b style="color:var(--text);">' + escapeHtml(m) + '</b>').join('、') + '</div>';
+    }
+
+    // 测试场景列表
+    const scenarios = data.test_scenarios || [];
+    if (scenarios.length) {
+      html += '<div style="margin-bottom:8px;font-size:14px;font-weight:600;">共 ' + scenarios.length + ' 个测试场景</div>';
+      scenarios.forEach(tc => {
+        const priorityClass = 'tc-tag-' + (tc.priority || 'P2');
+        const scopeLabel = {frontend:'前端',backend:'后端',api:'API',integration:'联调',database:'数据层'}[tc.scope] || tc.scope;
+        const typeLabel = {functional:'功能',boundary:'边界',exception:'异常',regression:'回归'}[tc.type] || tc.type;
+
+        html += '<div class="tc-card">';
+        html += '<div class="tc-card-header">';
+        html += '<span style="font-family:monospace;font-size:12px;color:var(--primary);">' + (tc.id || '') + '</span>';
+        html += '<span style="flex:1;font-size:14px;font-weight:500;">' + escapeHtml(tc.title || '') + '</span>';
+        html += '<span class="tc-tag ' + priorityClass + '">' + (tc.priority || 'P2') + '</span>';
+        html += '<span class="tc-tag tc-tag-scope">' + scopeLabel + '</span>';
+        html += '<span class="tc-tag tc-tag-type">' + typeLabel + '</span>';
+        html += '</div>';
+        html += '<div class="tc-card-body">';
+
+        if (tc.precondition) {
+          html += '<div style="font-size:13px;color:var(--text-secondary);margin-bottom:8px;">🔹 前置条件：' + escapeHtml(tc.precondition) + '</div>';
+        }
+
+        if (tc.steps && tc.steps.length) {
+          html += '<ol class="tc-steps">';
+          tc.steps.forEach(s => { html += '<li>' + escapeHtml(s) + '</li>'; });
+          html += '</ol>';
+        }
+
+        if (tc.expected) {
+          html += '<div style="font-size:13px;padding:8px 12px;background:rgba(63,185,80,0.08);border-radius:6px;margin-top:4px;">✅ <b>预期</b>：' + escapeHtml(tc.expected) + '</div>';
+        }
+
+        html += '</div></div>';
+      });
+    } else {
+      html += '<div style="text-align:center;padding:20px;color:var(--text-secondary);">未生成测试场景</div>';
+    }
+
+    // 风险点
+    if (data.risk_points && data.risk_points.length) {
+      html += '<div style="margin-top:16px;padding:12px 16px;background:rgba(248,81,73,0.08);border-radius:8px;">';
+      html += '<div style="font-size:14px;font-weight:600;margin-bottom:6px;">⚠️ 风险点</div>';
+      data.risk_points.forEach(r => { html += '<div style="font-size:13px;margin:4px 0;">• ' + escapeHtml(r) + '</div>'; });
+      html += '</div>';
+    }
+
+    // 回归范围
+    if (data.regression_scope) {
+      html += '<div style="margin-top:12px;padding:12px 16px;background:rgba(210,153,34,0.08);border-radius:8px;font-size:13px;">🔄 <b>回归测试建议</b>：' + escapeHtml(data.regression_scope) + '</div>';
+    }
+
+    content.innerHTML = html;
+  })
+  .catch(err => {
+    btn.disabled = false;
+    btn.textContent = '🧪 生成测试计划';
+    content.innerHTML = '<div style="padding:20px;color:#f85149;text-align:center;">❌ 请求失败: ' + err.message + '</div>';
+  });
 }
 
 function exportReport(format) {

@@ -13,7 +13,8 @@ from analyzer.prompts import (
     PROMPT_SMART_SUGGESTION,
     PROMPT_CHAT,
     PROMPT_EXPLAIN,
-    PROMPT_FIX_SUGGESTION
+    PROMPT_FIX_SUGGESTION,
+    PROMPT_TEST_PLAN
 )
 from analyzer.git_diff import get_changed_files
 from analyzer.tasks import task_manager
@@ -855,6 +856,82 @@ def browse_directory():
         return jsonify({'error': '没有访问权限'}), 403
     except Exception as e:
         return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/test-plan', methods=['POST'])
+def generate_test_plan():
+    """基于 Git Diff 生成场景测试计划。"""
+    data = request.get_json()
+    project_path = data.get('path', '').strip()
+    base = data.get('base', 'HEAD~1').strip()
+    head = data.get('head', 'HEAD').strip()
+    tech_stack = data.get('tech_stack', '').strip()
+
+    if not project_path:
+        return jsonify({'error': '请提供项目路径'}), 400
+
+    llm = get_llm_client()
+    if not llm.available:
+        return jsonify({'error': 'LLM 不可用，无法生成测试计划'}), 400
+
+    # 分析 diff 范围
+    from analyzer.diff_scope import analyze_diff_scope, get_change_scope_text
+    scope_analysis = analyze_diff_scope(project_path, base, head)
+
+    if not scope_analysis['is_git']:
+        return jsonify({'error': '不是 git 仓库'}), 400
+    if not scope_analysis['changed_files']:
+        return jsonify({'error': '没有检测到文件变更'}), 400
+
+    change_scope = get_change_scope_text(scope_analysis)
+    diff_content = scope_analysis['diff_content'] or '(无法获取 diff 内容)'
+
+    if not tech_stack:
+        tech_stack = '请根据代码内容自行判断'
+
+    prompt = PROMPT_TEST_PLAN.format(
+        tech_stack=tech_stack,
+        change_scope=change_scope,
+        diff_content=diff_content
+    )
+
+    try:
+        raw = llm.chat(SYSTEM_PROMPT, prompt)
+
+        # 解析 LLM 返回的 JSON
+        import re as _re
+
+        # 清理包裹
+        json_text = raw.strip()
+        if '```json' in json_text:
+            json_text = json_text.split('```json')[1].split('```')[0].strip()
+        elif '```' in json_text:
+            json_text = json_text.split('```')[1].split('```')[0].strip()
+
+        # 尝试直接解析
+        plan_data = None
+        json_match = _re.search(r'\{[\s\S]*\}', json_text)
+        if json_match:
+            try:
+                plan_data = json.loads(json_match.group())
+            except json.JSONDecodeError:
+                pass
+
+        if not plan_data:
+            # 返回原始文本作为 fallback
+            plan_data = {
+                'change_summary': raw,
+                'test_scenarios': [],
+            }
+
+        # 补充分类文件信息
+        plan_data['changed_files'] = scope_analysis['changed_files']
+        plan_data['scope_summary'] = dict(scope_analysis['scope_summary'])
+
+        return jsonify(plan_data)
+
+    except Exception as e:
+        return jsonify({'error': f'生成测试计划出错: {str(e)}'}), 500
 
 
 @app.route('/api/git/log', methods=['GET'])
