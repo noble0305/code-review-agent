@@ -72,7 +72,7 @@ def _save_analysis_to_db(project_path, language, result):
             'file_count': result.file_count,
             'total_lines': result.total_lines,
             'dimensions': [{'name': d.name, 'score': d.score, 'weight': d.weight, 'details': d.details,
-                           'issues': [{'severity': i.severity, 'file': os.path.relpath(i.file_path, project_path),
+                           'issues': [{'severity': i.severity, 'file': os.path.relpath(i.file_path, project_path) if i.file_path else '',
                                       'line': i.line_number, 'description': i.description} for i in d.issues]}
                           for d in result.dimensions]
         }
@@ -277,7 +277,7 @@ def analyze_enhanced():
                 for d in result.dimensions
             ])
             top_issues = '\n'.join([
-                f"- [{iss.severity}] {os.path.relpath(iss.file_path, project_path)}:{iss.line_number} - {iss.description}"
+                f"- [{iss.severity}] {os.path.relpath(iss.file_path, project_path) if iss.file_path else "(无文件)"}:{iss.line_number} - {iss.description}"
                 for iss in result.all_issues[:5]
             ])
             summary_prompt = PROMPT_SUMMARY.format(
@@ -416,7 +416,7 @@ def analyze_stream():
                     for d in result.dimensions
                 ])
                 top_issues = '\n'.join([
-                    f"- [{iss.severity}] {os.path.relpath(iss.file_path, project_path)}:{iss.line_number} - {iss.description}"
+                    f"- [{iss.severity}] {os.path.relpath(iss.file_path, project_path) if iss.file_path else "(无文件)"}:{iss.line_number} - {iss.description}"
                     for iss in result.all_issues[:10]
                 ])
                 summary_prompt = PROMPT_SUMMARY.format(
@@ -674,6 +674,50 @@ def api_webhook_list():
     from analyzer.storage import list_webhooks, init_db
     init_db()
     return jsonify(list_webhooks())
+
+
+@app.route('/api/browse', methods=['GET'])
+def browse_directory():
+    """浏览本地目录，返回子目录和文件列表。"""
+    import stat as stat_mod
+    req_path = request.args.get('path', '').strip()
+    
+    # 默认从用户主目录开始
+    if not req_path:
+        req_path = os.path.expanduser('~')
+    
+    # 安全检查：防止路径遍历
+    req_path = os.path.abspath(req_path)
+    
+    if not os.path.isdir(req_path):
+        return jsonify({'error': f'目录不存在: {req_path}'}), 400
+    
+    try:
+        entries = []
+        for entry in sorted(os.listdir(req_path), key=lambda x: x.lower()):
+            full_path = os.path.join(req_path, entry)
+            try:
+                is_dir = os.path.isdir(full_path)
+                # 隐藏文件/目录跳过（除了用户主动展开）
+                if entry.startswith('.') and is_dir:
+                    continue
+                entries.append({
+                    'name': entry,
+                    'path': full_path,
+                    'is_dir': is_dir,
+                })
+            except (PermissionError, OSError):
+                continue
+        
+        return jsonify({
+            'current_path': req_path,
+            'parent_path': os.path.dirname(req_path) if req_path != '/' else None,
+            'entries': entries,
+        })
+    except PermissionError:
+        return jsonify({'error': '没有访问权限'}), 403
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
 
 
 if __name__ == '__main__':

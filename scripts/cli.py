@@ -44,6 +44,14 @@ def cmd_analyze(args):
             print(f"检测到 {len(changed)} 个变更文件", file=sys.stderr)
             result = analyzer.analyze(project_path, file_list=changed)
             _output_result(result, project_path, args)
+            if args.save:
+                try:
+                    init_db()
+                    result_dict = _result_to_dict(result, project_path)
+                    aid = save_analysis(project_path, args.lang, result_dict)
+                    print(f"已保存分析记录 (ID: {aid})", file=sys.stderr)
+                except Exception as e:
+                    print(f"保存失败: {e}", file=sys.stderr)
             return _check_threshold(result.total_score, args.threshold)
 
     result = analyzer.analyze(project_path)
@@ -71,13 +79,13 @@ def _result_to_dict(result, project_path):
         'language': result.language,
         'dimensions': [
             {'name': d.name, 'score': round(d.score, 1), 'weight': d.weight, 'details': d.details,
-             'issues': [{'severity': i.severity, 'file': os.path.relpath(i.file_path, project_path),
+             'issues': [{'severity': i.severity, 'file': os.path.relpath(i.file_path, project_path) if i.file_path else '',
                          'line': i.line_number, 'description': i.description, 'suggestion': i.suggestion,
                          'metric': i.metric} for i in d.issues]}
             for d in result.dimensions
         ],
         'all_issues': [
-            {'severity': i.severity, 'file': os.path.relpath(i.file_path, project_path),
+            {'severity': i.severity, 'file': os.path.relpath(i.file_path, project_path) if i.file_path else '',
              'line': i.line_number, 'description': i.description, 'suggestion': i.suggestion,
              'metric': i.metric}
             for i in result.all_issues

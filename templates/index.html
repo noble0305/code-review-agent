@@ -226,15 +226,143 @@ button:disabled { background: #21262d; color: var(--text-muted); cursor: not-all
     </div>
 
     <div class="input-group">
-      <input type="text" id="projectPath" placeholder="输入项目目录路径，如 /home/user/my-project" />
+      <input type="text" id="projectPath" placeholder="输入项目目录路径，或点击 📂 浏览" />
+      <button onclick="openFolderPicker()" title="浏览本地目录" style="padding:10px 14px;background:var(--surface);border:1px solid var(--border);border-radius:6px;color:var(--text);cursor:pointer;font-size:16px;">📂</button>
       <select id="language">
         <option value="python">Python</option>
         <option value="javascript">JavaScript / TypeScript</option>
         <option value="java">Java</option>
         <option value="go">Go</option>
       </select>
+      <select id="analysisMode" onchange="onModeChange()" style="padding:10px 12px;background:var(--surface);border:1px solid var(--border);border-radius:6px;color:var(--text);font-size:14px;cursor:pointer;">
+        <option value="full">📊 全量分析</option>
+        <option value="diff">🔀 最近提交 (Diff)</option>
+        <option value="diff-custom">🔀 自定义对比</option>
+      </select>
       <button id="analyzeBtn" onclick="startAnalysis()">开始审查</button>
     </div>
+
+    <!-- Diff 参数行（自定义对比时显示） -->
+    <div id="diffParams" style="display:none;padding:4px 0 12px;gap:8px;align-items:center;">
+      <span style="font-size:13px;color:var(--text-secondary);">对比范围：</span>
+      <input type="text" id="diffBase" placeholder="基准 (如 HEAD~3 或 main)" style="padding:6px 10px;background:var(--surface);border:1px solid var(--border);border-radius:6px;color:var(--text);font-size:13px;width:160px;" value="HEAD~1" />
+      <span style="color:var(--text-secondary);">→</span>
+      <input type="text" id="diffHead" placeholder="目标 (如 HEAD 或 dev)" style="padding:6px 10px;background:var(--surface);border:1px solid var(--border);border-radius:6px;color:var(--text);font-size:13px;width:160px;" value="HEAD" />
+      <span style="font-size:12px;color:var(--text-secondary);margin-left:4px;">仅分析两次提交之间变更的文件</span>
+    </div>
+
+    <!-- 目录浏览弹窗 -->
+    <div id="folderModal" style="display:none;position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.6);z-index:1000;align-items:center;justify-content:center;">
+      <div style="background:var(--surface);border:1px solid var(--border);border-radius:12px;width:560px;max-height:70vh;display:flex;flex-direction:column;box-shadow:0 20px 60px rgba(0,0,0,0.4);">
+        <div style="padding:16px 20px;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:10px;">
+          <span style="font-size:16px;font-weight:600;">📂 选择项目目录</span>
+          <div style="flex:1"></div>
+          <button onclick="closeFolderPicker()" style="background:none;border:none;color:var(--text-secondary);font-size:20px;cursor:pointer;">✕</button>
+        </div>
+        <div style="padding:12px 20px;background:var(--bg);border-bottom:1px solid var(--border);">
+          <div style="display:flex;align-items:center;gap:8px;">
+            <button onclick="browseGoUp()" style="padding:4px 10px;background:var(--surface);border:1px solid var(--border);border-radius:4px;color:var(--text);cursor:pointer;font-size:13px;">⬆ 上级</button>
+            <input type="text" id="browsePathInput" style="flex:1;padding:6px 10px;background:var(--surface);border:1px solid var(--border);border-radius:4px;color:var(--text);font-size:13px;" placeholder="路径" onkeydown="if(event.key==='Enter')browseGoTo(this.value)" />
+            <button onclick="browseGoTo(document.getElementById('browsePathInput').value)" style="padding:4px 10px;background:var(--primary);border:none;border-radius:4px;color:#fff;cursor:pointer;font-size:13px;">前往</button>
+          </div>
+        </div>
+        <div id="folderList" style="flex:1;overflow-y:auto;padding:8px 12px;min-height:300px;">
+          <div style="text-align:center;padding:40px;color:var(--text-secondary);">加载中...</div>
+        </div>
+        <div style="padding:12px 20px;border-top:1px solid var(--border);display:flex;align-items:center;gap:10px;">
+          <span id="browseCurrentPath" style="flex:1;font-size:12px;color:var(--text-secondary);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;"></span>
+          <button onclick="selectCurrentFolder()" style="padding:8px 20px;background:var(--primary);border:none;border-radius:6px;color:#fff;cursor:pointer;font-size:14px;font-weight:500;">选择此目录</button>
+        </div>
+      </div>
+    </div>
+
+    <script>
+    let browseCurrentDir = '';
+
+    function openFolderPicker() {
+      const modal = document.getElementById('folderModal');
+      modal.style.display = 'flex';
+      const currentVal = document.getElementById('projectPath').value.trim();
+      browseLoadDir(currentVal || '');
+    }
+
+    function closeFolderPicker() {
+      document.getElementById('folderModal').style.display = 'none';
+    }
+
+    async function browseLoadDir(path) {
+      const listEl = document.getElementById('folderList');
+      const pathInput = document.getElementById('browsePathInput');
+      const currentPathEl = document.getElementById('browseCurrentPath');
+      listEl.innerHTML = '<div style="text-align:center;padding:40px;color:var(--text-secondary);">加载中...</div>';
+
+      try {
+        const resp = await fetch('/api/browse?path=' + encodeURIComponent(path));
+        const data = await resp.json();
+        if (data.error) { listEl.innerHTML = '<div style="text-align:center;padding:40px;color:#ef4444;">' + data.error + '</div>'; return; }
+
+        browseCurrentDir = data.current_path;
+        pathInput.value = browseCurrentDir;
+        currentPathEl.textContent = browseCurrentDir;
+
+        let html = '';
+        if (data.parent_path !== null) {
+          html += '<div onclick="browseLoadDir(\'' + escapeJs(data.parent_path) + '\')" style="padding:8px 12px;cursor:pointer;border-radius:6px;display:flex;align-items:center;gap:8px;color:var(--text-secondary);" onmouseover="this.style.background=\'var(--hover)\'" onmouseout="this.style.background=\'transparent\'">📁 ..</div>';
+        }
+        for (const entry of data.entries) {
+          if (entry.is_dir) {
+            html += '<div onclick="browseLoadDir(\'' + escapeJs(entry.path) + '\')" style="padding:8px 12px;cursor:pointer;border-radius:6px;display:flex;align-items:center;gap:8px;" onmouseover="this.style.background=\'var(--hover)\'" onmouseout="this.style.background=\'transparent\'">📁 ' + escapeHtml(entry.name) + '</div>';
+          }
+        }
+        for (const entry of data.entries) {
+          if (!entry.is_dir) {
+            html += '<div style="padding:8px 12px;border-radius:6px;display:flex;align-items:center;gap:8px;color:var(--text-secondary);opacity:0.5;">📄 ' + escapeHtml(entry.name) + '</div>';
+          }
+        }
+        listEl.innerHTML = html || '<div style="text-align:center;padding:40px;color:var(--text-secondary);">空目录</div>';
+      } catch (e) {
+        listEl.innerHTML = '<div style="text-align:center;padding:40px;color:#ef4444;">加载失败: ' + e.message + '</div>';
+      }
+    }
+
+    function browseGoUp() {
+      const pathInput = document.getElementById('browsePathInput');
+      const parentDir = pathInput.value.split('/').slice(0, -1).join('/') || '/';
+      browseLoadDir(parentDir);
+    }
+
+    function browseGoTo(path) {
+      if (path) browseLoadDir(path);
+    }
+
+    function selectCurrentFolder() {
+      document.getElementById('projectPath').value = browseCurrentDir;
+      closeFolderPicker();
+    }
+
+    function escapeHtml(s) { return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+    function escapeJs(s) { return s.replace(/\\/g,'\\\\').replace(/'/g,"\\'"); }
+
+    function onModeChange() {
+      const mode = document.getElementById('analysisMode').value;
+      document.getElementById('diffParams').style.display = (mode === 'diff-custom') ? 'flex' : 'none';
+    }
+
+    function getAnalysisPayload(path, lang) {
+      const mode = document.getElementById('analysisMode').value;
+      const payload = { path, language: lang };
+      if (mode === 'diff') {
+        payload.mode = 'diff';
+        payload.base = 'HEAD~1';
+        payload.head = 'HEAD';
+      } else if (mode === 'diff-custom') {
+        payload.mode = 'diff';
+        payload.base = document.getElementById('diffBase').value.trim() || 'HEAD~1';
+        payload.head = document.getElementById('diffHead').value.trim() || 'HEAD';
+      }
+      return payload;
+    }
+    </script>
 
     <div class="progress" id="progress">
       <div class="progress-bar"><div class="progress-fill" id="progressFill"></div></div>
@@ -394,7 +522,7 @@ function startAnalysis() {
   fetch('/api/analyze', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ path, language: lang })
+    body: JSON.stringify(getAnalysisPayload(path, lang))
   })
   .then(r => r.json())
   .then(data => {
@@ -419,7 +547,7 @@ function startAnalysis() {
       fetch('/api/analyze/enhanced', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ path, language: lang })
+        body: JSON.stringify(getAnalysisPayload(path, lang))
       })
       .then(r => r.json())
       .then(enhancedData => {
