@@ -1,6 +1,7 @@
 """Flask application for code review agent."""
 import os
 import json
+import re
 import threading
 from flask import Flask, render_template, request, jsonify, Response, stream_with_context
 from analyzer import get_analyzer
@@ -11,7 +12,8 @@ from analyzer.prompts import (
     PROMPT_SUMMARY,
     PROMPT_SMART_SUGGESTION,
     PROMPT_CHAT,
-    PROMPT_EXPLAIN
+    PROMPT_EXPLAIN,
+    PROMPT_FIX_SUGGESTION
 )
 from analyzer.git_diff import get_changed_files
 from analyzer.tasks import task_manager
@@ -539,7 +541,142 @@ def explain_issue():
         return jsonify({'error': f'LLM 调用出错: {str(e)}'}), 500
 
 
-@app.route('/api/history', methods=['GET'])
+@app.route('/api/issue/fix', methods=['POST'])
+def fix_issue():
+    """生成 issue 的修复建议，返回修改前后对比。"""
+    data = request.get_json()
+    file_path = data.get('file_path', '').strip()
+    line = data.get('line', 0)
+    description = data.get('description', '').strip()
+    language = data.get('language', 'python')
+    severity = data.get('severity', 'warning')
+
+    if not file_path or not description:
+        return jsonify({'error': '缺少必要参数'}), 400
+
+    llm = get_llm_client()
+    if not llm.available:
+        return jsonify({'error': 'LLM 不可用，无法生成修复建议'}), 400
+
+    # 读取文件
+    try:
+        with open(file_path, 'r', encoding='utf-8') as f:
+            all_lines = f.readlines()
+    except Exception as e:
+        return jsonify({'error': f'读取文件失败: {str(e)}'}), 400
+
+    # 取问题代码上下文：找到所属函数/类的范围
+    context_start, context_end = _find_code_scope(all_lines, line - 1, language)
+    original_code = ''.join(all_lines[context_start:context_end])
+
+    fix_prompt = PROMPT_FIX_SUGGESTION.format(
+        file_path=os.path.basename(file_path),
+        line=line,
+        language=language,
+        description=description,
+        original_code=original_code
+    )
+
+    try:
+        raw = llm.chat(SYSTEM_PROMPT, fix_prompt)
+        # 解析 LLM 返回的 JSON
+        fix_data = {'analysis': '', 'fix_description': '', 'fixed_code': ''}
+
+        # 尝试提取 JSON（可能被 ```json 包裹）
+        json_text = raw.strip()
+        if '```json' in json_text:
+            json_text = json_text.split('```json')[1].split('```')[0].strip()
+        elif '```' in json_text:
+            json_text = json_text.split('```')[1].split('```')[0].strip()
+
+        import re as _re
+        # 尝试用正则提取各字段（比 JSON 解析更宽容）
+        analysis_match = _re.search(r'"analysis"\s*:\s*"((?:[^"\\]|\\.)*)"', json_text)
+        fix_desc_match = _re.search(r'"fix_description"\s*:\s*"((?:[^"\\]|\\.)*)"', json_text)
+        # fixed_code 可能是多行，用贪婪匹配到字段结束
+        fixed_code_match = _re.search(r'"fixed_code"\s*:\s*"(.*?)""\s*\}', json_text, _re.DOTALL)
+
+        if analysis_match:
+            fix_data['analysis'] = analysis_match.group(1).replace('\\"', '"').replace('\\n', '\n')
+        else:
+            # fallback: 用整个 raw 作为 analysis
+            fix_data['analysis'] = raw
+
+        if fix_desc_match:
+            fix_data['fix_description'] = fix_desc_match.group(1).replace('\\"', '"').replace('\\n', '\n')
+
+        if fixed_code_match:
+            fix_data['fixed_code'] = fixed_code_match.group(1).replace('\\"', '"')
+        else:
+            # 尝试另一种模式：三引号包裹
+            triple_quote = _re.search(r'"fixed_code"\s*:\s*"""(.*?)"""', json_text, _re.DOTALL)
+            if triple_quote:
+                fix_data['fixed_code'] = triple_quote.group(1)
+
+        return jsonify({
+            'file_path': file_path,
+            'file_name': os.path.basename(file_path),
+            'line': line,
+            'severity': severity,
+            'description': description,
+            'analysis': fix_data.get('analysis', ''),
+            'fix_description': fix_data.get('fix_description', ''),
+            'original_code': original_code,
+            'fixed_code': fix_data.get('fixed_code', ''),
+            'context_start': context_start + 1,  # 转为 1-indexed
+            'context_end': context_end,
+        })
+    except Exception as e:
+        return jsonify({'error': f'生成修复建议出错: {str(e)}'}), 500
+
+
+def _find_code_scope(lines: list, issue_line_0: int, language: str):
+    """找到 issue 所在的代码块范围（函数/方法/类），返回 (start, end) 0-indexed。"""
+    n = len(lines)
+    start = issue_line_0
+    end = min(issue_line_0 + 1, n)
+
+    # 向上找函数/类/方法定义
+    for i in range(issue_line_0, max(issue_line_0 - 50, -1), -1):
+        stripped = lines[i].rstrip()
+        if not stripped or stripped.isspace():
+            continue
+        # 各语言的函数/类定义起始
+        if language == 'python':
+            if re.match(r'^(def |class |async def |@)', stripped):
+                start = i
+                break
+        elif language in ('javascript', 'java'):
+            if re.match(r'^\s*(function |const |let |var |class |public |private |protected |static |async |@)', stripped):
+                start = i
+                break
+        elif language == 'go':
+            if re.match(r'^\s*func ', stripped):
+                start = i
+                break
+
+    # 向下找代码块结尾
+    indent_level = len(lines[start]) - len(lines[start].lstrip())
+    for i in range(start + 1, min(start + 80, n)):
+        stripped = lines[i].rstrip()
+        if not stripped:
+            continue
+        current_indent = len(lines[i]) - len(lines[i].lstrip())
+        if language == 'python' and current_indent <= indent_level and not stripped.startswith(('#', '"""', "'''")):
+            end = i
+            break
+        end = i + 1
+    else:
+        end = min(start + 40, n)
+
+    # 最多取 40 行
+    if end - start > 40:
+        end = start + 40
+
+    return max(0, start), min(end, n)
+
+
+
 def api_history():
     """分析历史列表。"""
     from analyzer.storage import list_analyses, init_db

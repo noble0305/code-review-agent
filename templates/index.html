@@ -127,6 +127,28 @@ button:disabled { background: #21262d; color: var(--text-muted); cursor: not-all
 }
 .issue-explain-btn:hover:not(:disabled) { background: var(--accent); color: #fff; border-color: var(--accent); }
 .issue-explain-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+.issue-fix-btn {
+  padding: 6px 12px; background: var(--primary); border: 1px solid var(--primary);
+  border-radius: 4px; color: #fff; font-size: 12px; cursor: pointer;
+  margin-top: 8px; margin-left: 6px; transition: all .2s;
+}
+.issue-fix-btn:hover:not(:disabled) { opacity: 0.85; }
+.issue-fix-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+.diff-container { margin-top: 10px; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+.diff-header { padding: 8px 14px; background: var(--surface); font-size: 13px; font-weight: 600; }
+.diff-analysis { padding: 10px 14px; font-size: 13px; line-height: 1.6; border-bottom: 1px solid var(--border); }
+.diff-panels { display: flex; overflow: hidden; }
+.diff-panel { flex: 1; min-width: 0; overflow-x: auto; border-right: 1px solid var(--border); }
+.diff-panel:last-child { border-right: none; }
+.diff-panel-header { padding: 6px 14px; font-size: 12px; font-weight: 600; }
+.diff-panel-header.before { background: rgba(248,81,73,0.12); color: #f85149; }
+.diff-panel-header.after { background: rgba(63,185,80,0.12); color: #3fb950; }
+.diff-code { margin: 0; }
+.diff-code pre { margin: 0; padding: 10px 14px; white-space: pre; overflow-x: auto; font-family: 'SF Mono',Consolas,monospace; font-size: 12px; line-height: 1.6; }
+.diff-line-remove { background: rgba(248,81,73,0.15); display: block; }
+.diff-line-add { background: rgba(63,185,80,0.15); display: block; }
+.diff-line-context { display: block; }
+.diff-empty { padding: 20px; text-align: center; color: var(--text-secondary); font-style: italic; }
 .issue-explanation {
   margin-top: 12px; padding: 12px; background: rgba(88, 166, 255, 0.1);
   border: 1px solid rgba(88, 166, 255, 0.2); border-radius: 6px;
@@ -669,7 +691,10 @@ function renderIssues(issues) {
     return;
   }
 
-  list.innerHTML = issues.map((i, idx) => `
+  list.innerHTML = issues.map((i, idx) => {
+    const safeDesc = i.description.replace(/'/g, "\\'").replace(/"/g, '&quot;');
+    const safeFile = i.file.replace(/'/g, "\\'");
+    return `
     <li class="issue-item" data-severity="${i.severity}">
       <div class="issue-header">
         <span>${i.icon}</span>
@@ -678,10 +703,14 @@ function renderIssues(issues) {
       <div class="issue-desc">${i.description}</div>
       ${i.suggestion ? `<div class="issue-suggestion">💡 ${i.suggestion}</div>` : ''}
       ${i.metric ? `<div class="issue-metric">${i.metric}</div>` : ''}
-      <button class="issue-explain-btn" onclick="explainIssue('${i.file}', ${i.line}, '${i.description.replace(/'/g, "\\'")}', ${idx})" ${!llmAvailable ? 'disabled' : ''}>🤖 AI 解释</button>
+      <div style="display:flex;align-items:center;">
+        <button class="issue-explain-btn" onclick="explainIssue('${safeFile}', ${i.line}, '${safeDesc}', ${idx})" ${!llmAvailable ? 'disabled' : ''}>🤖 AI 解释</button>
+        <button class="issue-fix-btn" onclick="fixIssue('${safeFile}', ${i.line}, '${safeDesc}', ${idx}, '${i.severity}')" ${!llmAvailable ? 'disabled' : ''}>🔧 修改建议</button>
+      </div>
       <div class="issue-explanation" id="explanation-${idx}"></div>
-    </li>
-  `).join('');
+      <div id="fix-${idx}"></div>
+    </li>`;
+  }).join('');
 }
 
 function explainIssue(file, line, description, idx) {
@@ -712,6 +741,68 @@ function explainIssue(file, line, description, idx) {
   })
   .catch(err => {
     explanationEl.innerHTML = `<span style="color:var(--red)">请求失败: ${err.message}</span>`;
+  });
+}
+
+function fixIssue(file, line, description, idx, severity) {
+  const fixEl = document.getElementById(`fix-${idx}`);
+  fixEl.style.display = 'block';
+  fixEl.innerHTML = '<div class="diff-container"><div class="diff-header">🔧 正在生成修改建议...</div></div>';
+
+  fetch('/api/issue/fix', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      file_path: file,
+      line: line,
+      description: description,
+      language: document.getElementById('language').value,
+      severity: severity || 'warning'
+    })
+  })
+  .then(r => r.json())
+  .then(data => {
+    if (data.error) {
+      fixEl.innerHTML = `<div class="diff-container"><div class="diff-header" style="color:#f85149;">❌ ${data.error}</div></div>`;
+      return;
+    }
+
+    let html = '<div class="diff-container">';
+
+    // 问题分析
+    if (data.analysis) {
+      html += `<div class="diff-analysis">🔍 <b>问题分析</b>：${escapeHtml(data.analysis)}</div>`;
+    }
+    if (data.fix_description) {
+      html += `<div class="diff-analysis">✅ <b>修复方案</b>：${escapeHtml(data.fix_description)}</div>`;
+    }
+
+    // 代码对比
+    if (data.fixed_code) {
+      const origLines = (data.original_code || '').split('\n');
+      const fixedLines = data.fixed_code.split('\n');
+
+      // 简单 diff：逐行对比
+      html += '<div class="diff-panels">';
+      html += '<div class="diff-panel"><div class="diff-panel-header before">❌ 修改前 (' + escapeHtml(data.file_name || '') + ':' + (data.context_start || '') + ')</div>';
+      html += '<div class="diff-code"><pre>';
+      origLines.forEach(l => { html += '<span class="diff-line-remove">- ' + escapeHtml(l) + '</span>\n'; });
+      html += '</pre></div></div>';
+
+      html += '<div class="diff-panel"><div class="diff-panel-header after">✅ 修改后</div>';
+      html += '<div class="diff-code"><pre>';
+      fixedLines.forEach(l => { html += '<span class="diff-line-add">+ ' + escapeHtml(l) + '</span>\n'; });
+      html += '</pre></div></div>';
+      html += '</div>';
+    } else {
+      html += '<div class="diff-empty">此问题无法通过简单的代码修改解决，建议参考分析说明手动调整。</div>';
+    }
+
+    html += '</div>';
+    fixEl.innerHTML = html;
+  })
+  .catch(err => {
+    fixEl.innerHTML = `<div class="diff-container"><div class="diff-header" style="color:#f85149;">❌ 请求失败: ${err.message}</div></div>`;
   });
 }
 

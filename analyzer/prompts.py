@@ -71,3 +71,27 @@ PROMPT_EXPLAIN = """请解释以下代码片段中存在的问题：
 2. 问题出在哪里
 3. 为什么这是一种不好的实践
 """
+
+PROMPT_FIX_SUGGESTION = """请为以下代码问题提供修复建议，要求严格按格式返回。
+
+**文件**: {file_path}（第 {line} 行）
+**语言**: {language}
+**问题描述**: {description}
+
+**原始代码**:
+```{language}
+{original_code}
+```
+
+请严格按以下 JSON 格式返回（不要加 ```json 包裹，直接返回 JSON）：
+{{
+  "analysis": "用 1-2 句话分析问题原因",
+  "fix_description": "修复方案的简要描述",
+  "fixed_code": "修复后的完整代码片段（替换原始代码的部分）"
+}}
+
+注意：
+- fixed_code 必须是可以直接替换原始代码的完整代码
+- 保持原有的缩进风格
+- 如果问题无法通过代码修复（如架构问题），fixed_code 设为空字符串
+"""
