@@ -398,10 +398,15 @@ button:disabled { background: #21262d; color: var(--text-muted); cursor: not-all
       const diffParams = document.getElementById('diffParams');
       const commitPicker = document.getElementById('commitPicker');
       const customDiff = document.getElementById('customDiffInputs');
+      const testPlanBtn = document.getElementById('analysisTestPlanBtn');
 
       diffParams.style.display = (mode !== 'full') ? 'block' : 'none';
       commitPicker.style.display = (mode === 'diff') ? 'block' : 'none';
       customDiff.style.display = (mode === 'diff-custom') ? 'flex' : 'none';
+      testPlanBtn.style.display = (mode !== 'full') ? 'inline-block' : 'none';
+
+      // 隐藏之前的测试计划
+      if (mode === 'full') document.getElementById('analysisTestPlanSection').style.display = 'none';
 
       if (mode === 'diff') {
         loadCommits();
@@ -533,14 +538,14 @@ button:disabled { background: #21262d; color: var(--text-muted); cursor: not-all
       <div style="margin-top:20px;display:flex;gap:12px;flex-wrap:wrap;" id="exportButtons">
         <button onclick="exportReport('markdown')" style="background:#21262d;border:1px solid var(--border);padding:8px 16px;border-radius:6px;color:var(--text);cursor:pointer;">📄 导出 Markdown</button>
         <button onclick="exportReport('html')" style="background:#21262d;border:1px solid var(--border);padding:8px 16px;border-radius:6px;color:var(--text);cursor:pointer;">🌐 导出 HTML</button>
-        <button id="testPlanBtn" onclick="generateTestPlan()" style="background:var(--primary);border:1px solid var(--primary);padding:8px 16px;border-radius:6px;color:#fff;cursor:pointer;font-weight:500;">🧪 生成测试计划</button>
+        <button id="analysisTestPlanBtn" onclick="generateAnalysisTestPlan()" style="background:var(--primary);border:1px solid var(--primary);padding:8px 16px;border-radius:6px;color:#fff;cursor:pointer;font-weight:500;">🧪 生成测试计划</button>
       </div>
 
       <!-- 测试计划区域 -->
-      <div id="testPlanSection" style="display:none;margin-top:20px;border:1px solid var(--border);border-radius:12px;overflow:hidden;">
+      <div id="analysisTestPlanSection" style="display:none;margin-top:20px;border:1px solid var(--border);border-radius:12px;overflow:hidden;">
         <div style="padding:14px 20px;background:var(--surface);display:flex;align-items:center;gap:8px;border-bottom:1px solid var(--border);">
           <span style="font-size:16px;font-weight:600;">🧪 场景测试计划</span>
-          <span id="testPlanScope" style="font-size:12px;color:var(--text-secondary);"></span>
+          <span id="analysisTestPlanScope" style="font-size:12px;color:var(--text-secondary);"></span>
         </div>
         <div id="testPlanContent" style="padding:20px;"></div>
       </div>
@@ -585,6 +590,7 @@ button:disabled { background: #21262d; color: var(--text-muted); cursor: not-all
 <script>
 let allIssues = [];
 let currentAnalysisResult = null;
+let currentProjectPath = '';
 let llmAvailable = false;
 let chatHistory = [];
 let chatPanelExpanded = true;
@@ -752,6 +758,7 @@ function scoreColor(score) {
 
 function renderResults(data) {
   document.getElementById('results').style.display = 'block';
+  currentProjectPath = data.project_path || document.getElementById('projectPath').value.trim();
   const score = data.total_score;
   const color = scoreColor(score);
 
@@ -831,6 +838,7 @@ function explainIssue(file, line, description, idx) {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
+      project_path: currentProjectPath || document.getElementById('projectPath').value.trim(),
       file_path: file,
       line: line,
       description: description,
@@ -862,6 +870,7 @@ function fixIssue(file, line, description, idx, severity) {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
+      project_path: currentProjectPath || document.getElementById('projectPath').value.trim(),
       file_path: file,
       line: line,
       description: description,
@@ -1186,14 +1195,14 @@ async function viewAnalysis(id) {
   document.getElementById('exportButtons').style.display = 'flex';
 }
 
-function generateTestPlan() {
+function generateAnalysisTestPlan() {
   const path = document.getElementById('projectPath').value.trim();
   if (!path) { alert('请先输入项目路径'); return; }
 
-  const btn = document.getElementById('testPlanBtn');
-  const section = document.getElementById('testPlanSection');
+  const btn = document.getElementById('analysisTestPlanBtn');
+  const section = document.getElementById('analysisTestPlanSection');
   const content = document.getElementById('testPlanContent');
-  const scopeEl = document.getElementById('testPlanScope');
+  const scopeEl = document.getElementById('analysisTestPlanScope');
 
   btn.disabled = true;
   btn.textContent = '🧪 生成中...';
@@ -1320,6 +1329,7 @@ function exportReport(format) {
 
 // Initialize on load
 document.addEventListener('DOMContentLoaded', () => {
+  onModeChange();
   checkLlmStatus();
 });
 </script>

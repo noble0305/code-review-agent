@@ -111,6 +111,11 @@ def get_analysis(analysis_id: int) -> Optional[Dict[str, Any]]:
             return None
         result = dict(row)
         result['dimensions'] = json.loads(result['dimensions_json'])
+        result['all_issues'] = [
+            issue
+            for dimension in result['dimensions']
+            for issue in dimension.get('issues', [])
+        ]
         del result['dimensions_json']
         return result
     finally:

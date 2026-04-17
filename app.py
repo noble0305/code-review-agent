@@ -29,6 +29,107 @@ def create_app():
     return app
 
 
+def _normalize_path(path: str) -> str:
+    """标准化路径。"""
+    return os.path.abspath(os.path.expanduser((path or '').strip()))
+
+
+def _validate_project_path(project_path: str) -> str:
+    """校验项目路径并返回绝对路径。"""
+    normalized = _normalize_path(project_path)
+    if not normalized:
+        raise ValueError('缺少项目路径')
+    if not os.path.isdir(normalized):
+        raise ValueError(f'目录不存在: {normalized}')
+    return normalized
+
+
+def _resolve_project_file_path(project_path: str, file_path: str) -> tuple[str, str]:
+    """将项目内文件路径解析为安全的绝对路径。"""
+    project_root = _validate_project_path(project_path)
+    requested_path = (file_path or '').strip()
+    if not requested_path:
+        raise ValueError('缺少文件路径')
+
+    candidate = requested_path
+    if not os.path.isabs(candidate):
+        candidate = os.path.join(project_root, candidate)
+    candidate = _normalize_path(candidate)
+
+    try:
+        if os.path.commonpath([project_root, candidate]) != project_root:
+            raise ValueError('文件路径超出项目目录范围')
+    except ValueError as exc:
+        raise ValueError('文件路径不合法') from exc
+
+    if not os.path.isfile(candidate):
+        raise ValueError(f'文件不存在: {requested_path}')
+
+    return project_root, candidate
+
+
+def _extract_json_text(raw: str) -> str:
+    """提取 LLM 返回中的 JSON 文本。"""
+    json_text = (raw or '').strip()
+    if '```json' in json_text:
+        json_text = json_text.split('```json', 1)[1].split('```', 1)[0].strip()
+    elif '```' in json_text:
+        json_text = json_text.split('```', 1)[1].split('```', 1)[0].strip()
+
+    if not json_text:
+        return json_text
+
+    start = json_text.find('{')
+    if start == -1:
+        return json_text
+
+    depth = 0
+    in_string = False
+    escaped = False
+    for index in range(start, len(json_text)):
+        char = json_text[index]
+        if escaped:
+            escaped = False
+            continue
+        if char == '\\':
+            escaped = True
+            continue
+        if char == '"':
+            in_string = not in_string
+            continue
+        if in_string:
+            continue
+        if char == '{':
+            depth += 1
+        elif char == '}':
+            depth -= 1
+            if depth == 0:
+                return json_text[start:index + 1].strip()
+
+    return json_text
+
+
+def _parse_llm_json(raw: str):
+    """优先直接解析 JSON，失败时再提取首个完整 JSON 对象。"""
+    json_text = (raw or '').strip()
+    if not json_text:
+        return None
+
+    try:
+        return json.loads(json_text)
+    except (TypeError, json.JSONDecodeError):
+        pass
+
+    extracted = _extract_json_text(json_text)
+    if extracted == json_text:
+        return None
+
+    try:
+        return json.loads(extracted)
+    except (TypeError, json.JSONDecodeError):
+        return None
+
+
 def _handle_mode_params(data, project_path, language, analyzer):
     """处理分析模式参数，返回 file_list 或 None（降级全量），或抛出提前返回。"""
     mode = data.get('mode', 'full')
@@ -114,6 +215,7 @@ def _notify_webhooks(response_data):
 def _build_response_data(result, project_path, tools_status):
     """构建分析响应数据。"""
     return {
+        'project_path': project_path,
         'total_score': result.total_score,
         'language': result.language,
         'file_count': result.file_count,
@@ -190,6 +292,37 @@ def analyze():
     analyzer = get_analyzer(language)
     if not analyzer:
         return jsonify({'error': f'不支持的语言: {language}'}), 400
+
+    status, file_list_or_data = _handle_mode_params(data, project_path, language, analyzer)
+    if status == 'empty':
+        empty_result = {
+            'total_score': 100,
+            'language': language,
+            'file_count': 0,
+            'total_lines': 0,
+            'dimensions': [],
+            'all_issues': [],
+            'analyzed_files': [],
+            'tools_status': {},
+        }
+
+        def generate_empty():
+            yield f"data: {json.dumps({'step': 'rules', 'status': 'completed', 'result': empty_result})}\n\n"
+            yield f"data: {json.dumps({'step': 'llm', 'status': 'skipped'})}\n\n"
+            yield f"data: {json.dumps({'step': 'done'})}\n\n"
+
+        return Response(stream_with_context(generate_empty()), mimetype='text/event-stream')
+    if status == 'cached':
+        cached_result = file_list_or_data
+
+        def generate_cached():
+            yield f"data: {json.dumps({'step': 'rules', 'status': 'completed', 'result': cached_result})}\n\n"
+            yield f"data: {json.dumps({'step': 'llm', 'status': 'skipped'})}\n\n"
+            yield f"data: {json.dumps({'step': 'done'})}\n\n"
+
+        return Response(stream_with_context(generate_cached()), mimetype='text/event-stream')
+
+    file_list = file_list_or_data
 
     # 处理分析模式
     status, file_list_or_data = _handle_mode_params(data, project_path, language, analyzer)
@@ -329,6 +462,7 @@ def analyze_enhanced():
             pass
 
     response_data = {
+        'project_path': project_path,
         'total_score': result.total_score,
         'language': result.language,
         'file_count': result.file_count,
@@ -399,12 +533,43 @@ def analyze_stream():
     if not analyzer:
         return jsonify({'error': f'不支持的语言: {language}'}), 400
 
+    status, file_list_or_data = _handle_mode_params(data, project_path, language, analyzer)
+    if status == 'empty':
+        empty_result = {
+            'total_score': 100,
+            'language': language,
+            'file_count': 0,
+            'total_lines': 0,
+            'dimensions': [],
+            'all_issues': [],
+            'analyzed_files': [],
+            'tools_status': {},
+        }
+
+        def generate_empty():
+            yield f"data: {json.dumps({'step': 'rules', 'status': 'completed', 'result': empty_result})}\n\n"
+            yield f"data: {json.dumps({'step': 'llm', 'status': 'skipped'})}\n\n"
+            yield f"data: {json.dumps({'step': 'done'})}\n\n"
+
+        return Response(stream_with_context(generate_empty()), mimetype='text/event-stream')
+    if status == 'cached':
+        cached_result = file_list_or_data
+
+        def generate_cached():
+            yield f"data: {json.dumps({'step': 'rules', 'status': 'completed', 'result': cached_result})}\n\n"
+            yield f"data: {json.dumps({'step': 'llm', 'status': 'skipped'})}\n\n"
+            yield f"data: {json.dumps({'step': 'done'})}\n\n"
+
+        return Response(stream_with_context(generate_cached()), mimetype='text/event-stream')
+
+    file_list = file_list_or_data
+
     def generate():
         try:
             # Step 1: Rule analysis
             yield f"data: {json.dumps({'step': 'rules', 'status': 'started'})}\n\n"
 
-            result = analyzer.analyze(project_path)
+            result = analyzer.analyze(project_path, file_list=file_list)
             tools_status = getattr(analyzer, 'tools_status', {})
 
             yield f"data: {json.dumps({'step': 'rules', 'status': 'completed', 'result': _build_response_data(result, project_path, tools_status)})}\n\n"
@@ -499,13 +664,14 @@ def chat():
 def explain_issue():
     """Get detailed LLM explanation for a specific issue."""
     data = request.get_json()
+    project_path = data.get('project_path', '').strip()
     file_path = data.get('file_path', '').strip()
-    line = data.get('line', 0)
+    line = max(int(data.get('line', 0) or 0), 1)
     description = data.get('description', '').strip()
     rule_id = data.get('rule_id', '').strip()
     language = data.get('language', 'python')
 
-    if not file_path or not description:
+    if not project_path or not file_path or not description:
         return jsonify({'error': '缺少必要参数'}), 400
 
     llm = get_llm_client()
@@ -514,8 +680,11 @@ def explain_issue():
 
     # Read code context
     try:
-        with open(file_path, 'r', encoding='utf-8') as f:
+        project_root, resolved_file_path = _resolve_project_file_path(project_path, file_path)
+        with open(resolved_file_path, 'r', encoding='utf-8') as f:
             lines = f.readlines()
+    except ValueError as e:
+        return jsonify({'error': str(e)}), 400
     except Exception as e:
         return jsonify({'error': f'读取文件失败: {str(e)}'}), 400
 
@@ -525,7 +694,7 @@ def explain_issue():
 
     # Generate explanation
     explain_prompt = PROMPT_EXPLAIN.format(
-        file_path=os.path.basename(file_path),
+        file_path=os.path.relpath(resolved_file_path, project_root),
         rule_id=rule_id or '代码质量',
         description=description,
         language=language,
@@ -546,13 +715,14 @@ def explain_issue():
 def fix_issue():
     """生成 issue 的修复建议，返回修改前后对比。"""
     data = request.get_json()
+    project_path = data.get('project_path', '').strip()
     file_path = data.get('file_path', '').strip()
-    line = data.get('line', 0)
+    line = max(int(data.get('line', 0) or 0), 1)
     description = data.get('description', '').strip()
     language = data.get('language', 'python')
     severity = data.get('severity', 'warning')
 
-    if not file_path or not description:
+    if not project_path or not file_path or not description:
         return jsonify({'error': '缺少必要参数'}), 400
 
     llm = get_llm_client()
@@ -561,8 +731,11 @@ def fix_issue():
 
     # 读取文件
     try:
-        with open(file_path, 'r', encoding='utf-8') as f:
+        project_root, resolved_file_path = _resolve_project_file_path(project_path, file_path)
+        with open(resolved_file_path, 'r', encoding='utf-8') as f:
             all_lines = f.readlines()
+    except ValueError as e:
+        return jsonify({'error': str(e)}), 400
     except Exception as e:
         return jsonify({'error': f'读取文件失败: {str(e)}'}), 400
 
@@ -571,7 +744,7 @@ def fix_issue():
     original_code = ''.join(all_lines[context_start:context_end])
 
     fix_prompt = PROMPT_FIX_SUGGESTION.format(
-        file_path=os.path.basename(file_path),
+        file_path=os.path.relpath(resolved_file_path, project_root),
         line=line,
         language=language,
         description=description,
@@ -582,41 +755,18 @@ def fix_issue():
         raw = llm.chat(SYSTEM_PROMPT, fix_prompt)
         # 解析 LLM 返回的 JSON
         fix_data = {'analysis': '', 'fix_description': '', 'fixed_code': ''}
+        parsed = _parse_llm_json(raw)
 
-        # 尝试提取 JSON（可能被 ```json 包裹）
-        json_text = raw.strip()
-        if '```json' in json_text:
-            json_text = json_text.split('```json')[1].split('```')[0].strip()
-        elif '```' in json_text:
-            json_text = json_text.split('```')[1].split('```')[0].strip()
-
-        import re as _re
-        # 尝试用正则提取各字段（比 JSON 解析更宽容）
-        analysis_match = _re.search(r'"analysis"\s*:\s*"((?:[^"\\]|\\.)*)"', json_text)
-        fix_desc_match = _re.search(r'"fix_description"\s*:\s*"((?:[^"\\]|\\.)*)"', json_text)
-        # fixed_code 可能是多行，用贪婪匹配到字段结束
-        fixed_code_match = _re.search(r'"fixed_code"\s*:\s*"(.*?)""\s*\}', json_text, _re.DOTALL)
-
-        if analysis_match:
-            fix_data['analysis'] = analysis_match.group(1).replace('\\"', '"').replace('\\n', '\n')
+        if isinstance(parsed, dict):
+            fix_data['analysis'] = str(parsed.get('analysis', '') or '')
+            fix_data['fix_description'] = str(parsed.get('fix_description', '') or '')
+            fix_data['fixed_code'] = str(parsed.get('fixed_code', '') or '')
         else:
-            # fallback: 用整个 raw 作为 analysis
             fix_data['analysis'] = raw
 
-        if fix_desc_match:
-            fix_data['fix_description'] = fix_desc_match.group(1).replace('\\"', '"').replace('\\n', '\n')
-
-        if fixed_code_match:
-            fix_data['fixed_code'] = fixed_code_match.group(1).replace('\\"', '"')
-        else:
-            # 尝试另一种模式：三引号包裹
-            triple_quote = _re.search(r'"fixed_code"\s*:\s*"""(.*?)"""', json_text, _re.DOTALL)
-            if triple_quote:
-                fix_data['fixed_code'] = triple_quote.group(1)
-
         return jsonify({
-            'file_path': file_path,
-            'file_name': os.path.basename(file_path),
+            'file_path': os.path.relpath(resolved_file_path, project_root),
+            'file_name': os.path.basename(resolved_file_path),
             'line': line,
             'severity': severity,
             'description': description,
@@ -676,8 +826,7 @@ def _find_code_scope(lines: list, issue_line_0: int, language: str):
 
     return max(0, start), min(end, n)
 
-
-
+@app.route('/api/history', methods=['GET'])
 def api_history():
     """分析历史列表。"""
     from analyzer.storage import list_analyses, init_db
@@ -899,23 +1048,7 @@ def generate_test_plan():
         raw = llm.chat(SYSTEM_PROMPT, prompt)
 
         # 解析 LLM 返回的 JSON
-        import re as _re
-
-        # 清理包裹
-        json_text = raw.strip()
-        if '```json' in json_text:
-            json_text = json_text.split('```json')[1].split('```')[0].strip()
-        elif '```' in json_text:
-            json_text = json_text.split('```')[1].split('```')[0].strip()
-
-        # 尝试直接解析
-        plan_data = None
-        json_match = _re.search(r'\{[\s\S]*\}', json_text)
-        if json_match:
-            try:
-                plan_data = json.loads(json_match.group())
-            except json.JSONDecodeError:
-                pass
+        plan_data = _parse_llm_json(raw)
 
         if not plan_data:
             # 返回原始文本作为 fallback
@@ -982,4 +1115,5 @@ def git_log():
 
 
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=5001, debug=True)
+    debug_enabled = os.getenv('FLASK_DEBUG', '').strip().lower() in ('1', 'true', 'yes', 'on')
+    app.run(host='0.0.0.0', port=5001, debug=debug_enabled)

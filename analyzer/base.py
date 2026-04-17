@@ -58,7 +58,7 @@ class BaseAnalyzer:
             project_path: 项目根目录
             file_list: 指定文件列表（如果提供，只分析这些文件）
         """
-        if file_list:
+        if file_list is not None:
             # 过滤出匹配扩展名的文件
             return [f for f in file_list if any(f.endswith(ext) for ext in self.FILE_EXTENSIONS) and os.path.isfile(f)]
         
