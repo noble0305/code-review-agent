@@ -4,7 +4,7 @@ import json
 import re
 import threading
 from flask import Flask, render_template, request, jsonify, Response, stream_with_context
-from analyzer import get_analyzer
+from analyzer import get_analyzer, detect_language
 from analyzer.tools import is_tool_available, get_tool_version
 from analyzer.llm import get_llm_client
 from analyzer.prompts import (
@@ -286,7 +286,7 @@ def analyze():
     """Original analyze endpoint - backward compatible."""
     data = request.get_json()
     project_path = data.get('path', '').strip()
-    language = data.get('language', 'python')
+    language = data.get('language', '').strip().lower() or detect_language(project_path)
 
     if not project_path:
         return jsonify({'error': '请输入项目目录路径'}), 400
@@ -373,7 +373,7 @@ def analyze_enhanced():
     """Enhanced analysis with LLM suggestions and summary."""
     data = request.get_json()
     project_path = data.get('path', '').strip()
-    language = data.get('language', 'python')
+    language = data.get('language', '').strip().lower() or detect_language(project_path)
 
     if not project_path:
         return jsonify({'error': '请输入项目目录路径'}), 400
@@ -526,7 +526,7 @@ def analyze_stream():
     """Streaming analysis with SSE."""
     data = request.get_json()
     project_path = data.get('path', '').strip()
-    language = data.get('language', 'python')
+    language = data.get('language', '').strip().lower() or detect_language(project_path)
 
     if not project_path:
         return jsonify({'error': '请输入项目目录路径'}), 400
