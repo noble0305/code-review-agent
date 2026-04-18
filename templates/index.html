@@ -288,6 +288,7 @@ button:disabled { background: var(--surface); color: var(--text-muted); cursor: 
       <button class="tab-btn" onclick="switchTab('history')" id="tabHistory" style="padding:12px 22px;background:none;border:none;border-bottom:2px solid transparent;color:var(--text-muted);font-size:14px;cursor:pointer;font-weight:500;transition:all .25s;">📈 历史趋势</button>
       <button class="tab-btn" onclick="switchTab('github')" id="tabGithub" style="padding:12px 22px;background:none;border:none;border-bottom:2px solid transparent;color:var(--text-muted);font-size:14px;cursor:pointer;font-weight:500;transition:all .25s;">🔗 GitHub集成</button>
       <button class="tab-btn" onclick="switchTab('rules')" id="tabRules" style="padding:12px 22px;background:none;border:none;border-bottom:2px solid transparent;color:var(--text-muted);font-size:14px;cursor:pointer;font-weight:500;transition:all .25s;">⚙️ 规则配置</button>
+      <button class="tab-btn" onclick="switchTab('test')" id="tabTest" style="padding:12px 22px;background:none;border:none;border-bottom:2px solid transparent;color:var(--text-muted);font-size:14px;cursor:pointer;font-weight:500;transition:all .25s;">🧪 自动测试</button>
     </div>
 
     <div id="panelAnalysis">
@@ -758,6 +759,82 @@ button:disabled { background: var(--surface); color: var(--text-muted); cursor: 
         <div id="rulesList" style="color:var(--text-muted);font-size:14px;">加载中...</div>
       </div>
     </div>
+
+    <!-- 测试面板 -->
+    <div id="panelTest" style="display:none;">
+      <h2 style="font-size:20px;margin-bottom:16px;font-weight:700;">🧪 自动测试 + 智能修复</h2>
+      <p style="color:var(--text-muted);font-size:13px;margin-bottom:20px;">自动生成测试计划 → 执行测试 → 失败时 LLM 智能修复 → 重新验证。支持 Python / JS / Go / Java。</p>
+
+      <!-- 输入区 -->
+      <div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:20px;margin-bottom:20px;">
+        <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:12px;">
+          <input type="text" id="testProjectPath" placeholder="输入项目目录路径" style="flex:1;min-width:280px;padding:11px 16px;background:var(--bg);border:1px solid var(--border);border-radius:var(--radius-sm);color:var(--text);font-size:14px;outline:none;" />
+          <select id="testLanguage" style="padding:11px 16px;background:var(--bg);border:1px solid var(--border);border-radius:var(--radius-sm);color:var(--text);font-size:14px;">
+            <option value="">🔍 自动检测</option>
+            <option value="python">Python (pytest)</option>
+            <option value="javascript">JavaScript (Jest)</option>
+            <option value="go">Go (go test)</option>
+            <option value="java">Java (JUnit)</option>
+          </select>
+        </div>
+        <div style="display:flex;gap:10px;">
+          <button onclick="generateTestPlan()" id="btnGenPlan" style="padding:10px 20px;">📋 生成测试计划</button>
+          <button onclick="runAutoFix()" id="btnAutoFix" style="padding:10px 20px;">🚀 一键测试+修复</button>
+          <button onclick="runTestOnly()" id="btnRunTest" style="padding:10px 20px;background:var(--surface-hover);color:var(--text);border:1px solid var(--border);">▶️ 仅执行测试</button>
+        </div>
+      </div>
+
+      <!-- 测试计划预览 -->
+      <div id="testPlanPreview" style="display:none;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);margin-bottom:20px;overflow:hidden;">
+        <div style="padding:12px 18px;border-bottom:1px solid var(--border);font-weight:600;font-size:14px;display:flex;justify-content:space-between;align-items:center;">
+          <span>📋 测试计划</span>
+          <span id="testPlanInfo" style="font-size:12px;color:var(--text-muted);font-weight:400;"></span>
+        </div>
+        <pre id="testPlanCode" style="margin:0;padding:16px;overflow-x:auto;font-family:'JetBrains Mono','SF Mono',Consolas,monospace;font-size:13px;line-height:1.6;max-height:400px;overflow-y:auto;"></pre>
+      </div>
+
+      <!-- 执行结果 -->
+      <div id="testResultArea" style="display:none;">
+        <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:20px;">
+          <div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:16px;text-align:center;">
+            <div style="font-size:11px;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px;">状态</div>
+            <div id="testStatus" style="font-size:24px;font-weight:700;margin-top:4px;">-</div>
+          </div>
+          <div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:16px;text-align:center;">
+            <div style="font-size:11px;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px;">总数</div>
+            <div id="testTotal" style="font-size:24px;font-weight:700;margin-top:4px;">0</div>
+          </div>
+          <div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:16px;text-align:center;">
+            <div style="font-size:11px;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px;">通过</div>
+            <div id="testPassed" style="font-size:24px;font-weight:700;margin-top:4px;color:var(--green);">0</div>
+          </div>
+          <div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:16px;text-align:center;">
+            <div style="font-size:11px;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px;">失败</div>
+            <div id="testFailed" style="font-size:24px;font-weight:700;margin-top:4px;color:var(--red);">0</div>
+          </div>
+        </div>
+
+        <!-- 错误输出 -->
+        <div id="testErrorOutput" style="display:none;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);margin-bottom:20px;overflow:hidden;">
+          <div style="padding:10px 16px;border-bottom:1px solid var(--border);font-weight:600;font-size:13px;color:var(--red);">❌ 错误输出</div>
+          <pre id="testErrorText" style="margin:0;padding:14px;overflow-x:auto;font-family:'JetBrains Mono',monospace;font-size:12px;line-height:1.5;max-height:300px;overflow-y:auto;"></pre>
+        </div>
+
+        <!-- 修复记录 -->
+        <div id="fixHistory" style="display:none;">
+          <h3 style="font-size:16px;margin-bottom:12px;font-weight:600;">🔧 修复记录</h3>
+          <div id="fixHistoryList"></div>
+        </div>
+      </div>
+
+      <!-- 测试历史 -->
+      <div style="margin-top:24px;">
+        <h3 style="font-size:16px;margin-bottom:12px;font-weight:600;">📊 测试历史</h3>
+        <div id="testHistoryList" style="color:var(--text-muted);font-size:13px;">点击加载...</div>
+        <button onclick="loadTestHistory()" style="padding:8px 16px;font-size:13px;margin-top:8px;">加载历史</button>
+      </div>
+    </div>
+
   </div>
 
   <!-- Chat Panel -->
@@ -1410,8 +1487,9 @@ function switchTab(tab) {
   document.getElementById('panelGithub').style.display = tab === 'github' ? '' : 'none';
   if (tab === 'github') { loadGithubIntegrations(); loadGithubReviews(); }
   document.getElementById('panelRules').style.display = tab === 'rules' ? '' : 'none';
+  document.getElementById('panelTest').style.display = tab === 'test' ? '' : 'none';
   if (tab === 'rules') { loadRules(); }
-  const btnMap = { analysis: 'tabAnalysis', history: 'tabHistory', github: 'tabGithub', rules: 'tabRules' };
+  const btnMap = { analysis: 'tabAnalysis', history: 'tabHistory', github: 'tabGithub', rules: 'tabRules', test: 'tabTest' };
   const btn = document.getElementById(btnMap[tab]);
   btn.style.borderBottomColor = 'var(--accent)';
   btn.style.color = 'var(--text)';
@@ -2033,6 +2111,157 @@ function renderCompareCharts(records) {
   onModeChange();
   checkLlmStatus();
  });
+
+// ===== 测试引擎 JS =====
+let currentTestPlan = null;
+
+async function generateTestPlan() {
+  const path = document.getElementById('testProjectPath').value.trim();
+  const lang = document.getElementById('testLanguage').value;
+  if (!path) { alert('请输入项目路径'); return; }
+
+  const btn = document.getElementById('btnGenPlan');
+  btn.disabled = true; btn.textContent = '⏳ 生成中...';
+
+  try {
+    const res = await fetch('/api/test/plan', {
+      method: 'POST', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({path, language: lang})
+    });
+    const data = await res.json();
+    if (data.error) { alert(data.error); return; }
+
+    currentTestPlan = data;
+    document.getElementById('testPlanPreview').style.display = '';
+    document.getElementById('testPlanCode').textContent = data.test_code;
+    document.getElementById('testPlanInfo').textContent =
+      `${data.language} · ${data.framework} · ${data.total_functions} 个函数`;
+  } catch(e) {
+    alert('请求失败: ' + e.message);
+  } finally {
+    btn.disabled = false; btn.textContent = '📋 生成测试计划';
+  }
+}
+
+async function runTestOnly() {
+  if (!currentTestPlan) { alert('请先生成测试计划'); return; }
+
+  const btn = document.getElementById('btnRunTest');
+  btn.disabled = true; btn.textContent = '⏳ 执行中...';
+
+  try {
+    const res = await fetch('/api/test/run', {
+      method: 'POST', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({plan_id: currentTestPlan.id})
+    });
+    const data = await res.json();
+    showTestResult(data);
+  } catch(e) {
+    alert('请求失败: ' + e.message);
+  } finally {
+    btn.disabled = false; btn.textContent = '▶️ 仅执行测试';
+  }
+}
+
+async function runAutoFix() {
+  const path = document.getElementById('testProjectPath').value.trim();
+  const lang = document.getElementById('testLanguage').value;
+  if (!path) { alert('请输入项目路径'); return; }
+
+  const btn = document.getElementById('btnAutoFix');
+  btn.disabled = true; btn.textContent = '⏳ 测试+修复中...';
+
+  try {
+    const res = await fetch('/api/test/auto-fix', {
+      method: 'POST', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({path, language: lang, max_rounds: 3})
+    });
+    const data = await res.json();
+    if (data.error) { alert(data.error); return; }
+
+    // 显示计划
+    if (data.plan) {
+      currentTestPlan = data.plan;
+      document.getElementById('testPlanPreview').style.display = '';
+      document.getElementById('testPlanCode').textContent = data.plan.test_code || '';
+      document.getElementById('testPlanInfo').textContent =
+        `${data.plan.language} · ${data.plan.framework} · ${data.plan.total_functions} 个函数`;
+    }
+
+    showTestResult(data);
+
+    // 显示修复历史
+    if (data.fix_history && data.fix_history.length > 0) {
+      document.getElementById('fixHistory').style.display = '';
+      let html = '';
+      data.fix_history.forEach(f => {
+        html += `<div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:14px;margin-bottom:10px;">`;
+        html += `<div style="font-weight:600;margin-bottom:8px;">🔄 第 ${f.round} 轮 ${f.fix_applied ? '✅ 已修复' : '❌ 修复失败'}</div>`;
+        html += `<div style="font-size:12px;color:var(--text-muted);margin-bottom:6px;">测试: ${f.test_result?.passed||0}/${f.test_result?.total||0} 通过</div>`;
+        if (f.analysis) {
+          html += `<details><summary style="cursor:pointer;font-size:13px;color:var(--accent-light);">查看分析</summary>`;
+          html += `<pre style="margin-top:8px;padding:10px;background:var(--bg);border-radius:6px;font-size:12px;overflow-x:auto;white-space:pre-wrap;">${escapeHtml(f.analysis)}</pre></details>`;
+        }
+        html += '</div>';
+      });
+      document.getElementById('fixHistoryList').innerHTML = html;
+    }
+  } catch(e) {
+    alert('请求失败: ' + e.message);
+  } finally {
+    btn.disabled = false; btn.textContent = '🚀 一键测试+修复';
+  }
+}
+
+function showTestResult(data) {
+  document.getElementById('testResultArea').style.display = '';
+
+  const status = data.status || (data.success ? 'passed' : 'failed');
+  const statusEl = document.getElementById('testStatus');
+  statusEl.textContent = status === 'passed' ? '✅ 通过' : '❌ 失败';
+  statusEl.style.color = status === 'passed' ? 'var(--green)' : 'var(--red)';
+
+  document.getElementById('testTotal').textContent = data.total || 0;
+  document.getElementById('testPassed').textContent = data.passed || 0;
+  document.getElementById('testFailed').textContent = data.failed || 0;
+
+  if (data.output) {
+    document.getElementById('testErrorOutput').style.display = '';
+    document.getElementById('testErrorText').textContent = data.output;
+  }
+}
+
+async function loadTestHistory() {
+  try {
+    const res = await fetch('/api/test/results?limit=20');
+    const data = await res.json();
+    if (!data.length) {
+      document.getElementById('testHistoryList').innerHTML = '<p style="color:var(--text-muted);">暂无测试记录</p>';
+      return;
+    }
+    let html = '<table style="width:100%;border-collapse:collapse;font-size:13px;">';
+    html += '<tr style="border-bottom:1px solid var(--border);"><th style="padding:8px;text-align:left;color:var(--text-muted);">时间</th><th style="text-align:left;color:var(--text-muted);">项目</th><th style="text-align:left;color:var(--text-muted);">语言</th><th style="text-align:left;color:var(--text-muted);">状态</th><th style="text-align:left;color:var(--text-muted);">通过率</th></tr>';
+    data.forEach(r => {
+      const rate = r.total > 0 ? Math.round(r.passed/r.total*100) : 0;
+      const statusColor = r.final_status === 'passed' ? 'var(--green)' : r.final_status === 'fixed' ? 'var(--accent-light)' : 'var(--red)';
+      html += `<tr style="border-bottom:1px solid var(--border);">`;
+      html += `<td style="padding:8px;">${(r.created_at||'').slice(0,16)}</td>`;
+      html += `<td style="padding:8px;max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${r.project_path || '-'}</td>`;
+      html += `<td style="padding:8px;">${r.language || '-'}</td>`;
+      html += `<td style="padding:8px;color:${statusColor};font-weight:600;">${r.final_status}</td>`;
+      html += `<td style="padding:8px;">${r.passed}/${r.total} (${rate}%)</td>`;
+      html += '</tr>';
+    });
+    html += '</table>';
+    document.getElementById('testHistoryList').innerHTML = html;
+  } catch(e) {
+    document.getElementById('testHistoryList').innerHTML = '<p style="color:var(--red);">加载失败: '+e.message+'</p>';
+  }
+}
+
+function escapeHtml(str) {
+  return String(str).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
 </script>
 </body>
 </html>

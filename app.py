@@ -19,6 +19,7 @@ from analyzer.prompts import (
 from analyzer.git_diff import get_changed_files
 from analyzer.tasks import task_manager
 from analyzer import storage as db
+from analyzer.test_engine import TestEngine
 from analyzer.github_integration import (
     verify_webhook_signature,
     run_pr_analysis,
@@ -1386,6 +1387,129 @@ def rules_delete(rule_id):
     if db.delete_rule(rule_id):
         return jsonify({'msg': '已删除'})
     return jsonify({'error': '未找到'}), 404
+
+
+# ===== 测试引擎 API =====
+
+test_engine = TestEngine()
+
+
+@app.route('/api/test/plan', methods=['POST'])
+def api_test_plan():
+    """生成测试计划。"""
+    data = request.get_json()
+    project_path = data.get('path', '').strip()
+    language = data.get('language', '').strip().lower() or detect_language(project_path)
+
+    if not project_path:
+        return jsonify({'error': '请输入项目目录路径'}), 400
+    if not os.path.isdir(project_path):
+        return jsonify({'error': f'目录不存在: {project_path}'}), 400
+
+    plan = test_engine.generate_plan(project_path, language)
+    if 'error' in plan:
+        return jsonify({'error': plan['error']}), 400
+
+    # 保存到数据库
+    plan_id = db.save_test_plan(
+        project_path, language,
+        plan['source_files'], plan['test_code'],
+        plan['framework'], status='generated'
+    )
+    plan['id'] = plan_id
+    return jsonify(plan)
+
+
+@app.route('/api/test/run', methods=['POST'])
+def api_test_run():
+    """执行测试。"""
+    data = request.get_json()
+    plan_id = data.get('plan_id')
+    project_path = data.get('path', '').strip()
+    language = data.get('language', '').strip().lower()
+    test_code = data.get('test_code', '')
+
+    if plan_id:
+        plan = db.get_test_plan(plan_id)
+        if not plan:
+            return jsonify({'error': '测试计划不存在'}), 404
+        project_path = plan['project_path']
+        language = plan['language']
+        test_code = plan['test_code']
+    elif not project_path or not test_code:
+        return jsonify({'error': '请提供 plan_id 或 path+test_code'}), 400
+
+    result = test_engine.run_tests(project_path, language, test_code)
+    if 'error' in result and 'total' not in result:
+        return jsonify({'error': result['error']}), 500
+
+    # 保存结果
+    rid = db.save_test_result(
+        plan_id or 0, result.get('total', 0), result.get('passed', 0),
+        result.get('failed', 0), result.get('errors'),
+        final_status='passed' if result.get('success') else 'failed'
+    )
+    result['id'] = rid
+    if plan_id:
+        db.update_test_plan_status(plan_id, 'completed')
+
+    return jsonify(result)
+
+
+@app.route('/api/test/auto-fix', methods=['POST'])
+def api_test_auto_fix():
+    """自动测试 + 修复循环（同步）。"""
+    data = request.get_json()
+    project_path = data.get('path', '').strip()
+    language = data.get('language', '').strip().lower() or detect_language(project_path)
+    max_rounds = min(int(data.get('max_rounds', 3)), 5)
+
+    if not project_path:
+        return jsonify({'error': '请输入项目目录路径'}), 400
+    if not os.path.isdir(project_path):
+        return jsonify({'error': f'目录不存在: {project_path}'}), 400
+
+    result = test_engine.auto_fix_loop(project_path, language, max_rounds)
+
+    # 保存计划
+    plan = result.get('plan', {})
+    plan_id = db.save_test_plan(
+        project_path, language,
+        plan.get('source_files', []), plan.get('test_code', ''),
+        plan.get('framework', ''), status='completed'
+    )
+
+    # 保存结果
+    rid = db.save_test_result(
+        plan_id, result.get('total', 0), result.get('passed', 0),
+        result.get('failed', 0), result.get('errors'),
+        fix_attempts=len(result.get('fix_history', [])),
+        fix_code=json.dumps(result.get('fix_history', []), ensure_ascii=False),
+        final_status=result.get('status', 'unknown')
+    )
+
+    result['plan_id'] = plan_id
+    result['result_id'] = rid
+    return jsonify(result)
+
+
+@app.route('/api/test/results')
+def api_test_results():
+    """获取测试历史。"""
+    limit = min(int(request.args.get('limit', 20)), 100)
+    results = db.list_test_results(limit)
+    return jsonify(results)
+
+
+@app.route('/api/test/<int:result_id>/report')
+def api_test_report(result_id):
+    """获取测试详细报告。"""
+    result = db.get_test_result(result_id)
+    if not result:
+        return jsonify({'error': '未找到'}), 404
+    plan = db.get_test_plan(result['plan_id']) if result['plan_id'] else None
+    fix_history = db.get_test_results_by_plan(result['plan_id']) if result['plan_id'] else []
+    return jsonify({'result': result, 'plan': plan, 'fix_history': fix_history})
 
 
 if __name__ == '__main__':

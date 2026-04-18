@@ -90,6 +90,33 @@ def init_db():
                 weight REAL DEFAULT 1.0,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             );
+
+            CREATE TABLE IF NOT EXISTS test_plans (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                project_path TEXT NOT NULL,
+                language TEXT NOT NULL,
+                files_json TEXT,
+                test_code TEXT,
+                framework TEXT,
+                status TEXT DEFAULT 'pending',
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+            CREATE INDEX IF NOT EXISTS idx_test_plans_project ON test_plans(project_path);
+
+            CREATE TABLE IF NOT EXISTS test_results (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                plan_id INTEGER REFERENCES test_plans(id),
+                total INTEGER DEFAULT 0,
+                passed INTEGER DEFAULT 0,
+                failed INTEGER DEFAULT 0,
+                errors TEXT,
+                coverage REAL,
+                fix_attempts INTEGER DEFAULT 0,
+                fix_code TEXT,
+                final_status TEXT DEFAULT 'pending',
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+            CREATE INDEX IF NOT EXISTS idx_test_results_plan ON test_results(plan_id);
         """)
         conn.commit()
     finally:
@@ -507,5 +534,117 @@ def get_dimension_weights() -> dict:
             "SELECT dimension, MAX(weight) as weight FROM rules WHERE enabled = 1 AND weight != 1.0 GROUP BY dimension"
         ).fetchall()
         return {r['dimension']: r['weight'] for r in rows}
+    finally:
+        conn.close()
+
+
+# ===== 测试计划相关 =====
+
+def save_test_plan(project_path, language, files_json, test_code, framework, status='pending'):
+    init_db()
+    conn = _get_conn()
+    try:
+        cursor = conn.execute(
+            "INSERT INTO test_plans (project_path, language, files_json, test_code, framework, status) VALUES (?,?,?,?,?,?)",
+            (project_path, language, json.dumps(files_json) if isinstance(files_json, list) else files_json, test_code, framework, status)
+        )
+        conn.commit()
+        return cursor.lastrowid
+    finally:
+        conn.close()
+
+
+def get_test_plan(plan_id):
+    init_db()
+    conn = _get_conn()
+    try:
+        row = conn.execute("SELECT * FROM test_plans WHERE id = ?", (plan_id,)).fetchone()
+        return dict(row) if row else None
+    finally:
+        conn.close()
+
+
+def list_test_plans(project_path=None, limit=20):
+    init_db()
+    conn = _get_conn()
+    try:
+        if project_path:
+            rows = conn.execute(
+                "SELECT * FROM test_plans WHERE project_path = ? ORDER BY created_at DESC LIMIT ?",
+                (project_path, limit)
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT * FROM test_plans ORDER BY created_at DESC LIMIT ?", (limit,)
+            ).fetchall()
+        return [dict(r) for r in rows]
+    finally:
+        conn.close()
+
+
+def save_test_result(plan_id, total, passed, failed, errors=None, coverage=None,
+                     fix_attempts=0, fix_code=None, final_status='pending'):
+    init_db()
+    conn = _get_conn()
+    try:
+        cursor = conn.execute(
+            """INSERT INTO test_results
+               (plan_id, total, passed, failed, errors, coverage, fix_attempts, fix_code, final_status)
+               VALUES (?,?,?,?,?,?,?,?,?)""",
+            (plan_id, total, passed, failed,
+             json.dumps(errors) if isinstance(errors, (list, dict)) else errors,
+             coverage, fix_attempts, fix_code, final_status)
+        )
+        conn.commit()
+        return cursor.lastrowid
+    finally:
+        conn.close()
+
+
+def get_test_result(result_id):
+    init_db()
+    conn = _get_conn()
+    try:
+        row = conn.execute("SELECT * FROM test_results WHERE id = ?", (result_id,)).fetchone()
+        return dict(row) if row else None
+    finally:
+        conn.close()
+
+
+def get_test_results_by_plan(plan_id):
+    init_db()
+    conn = _get_conn()
+    try:
+        rows = conn.execute(
+            "SELECT * FROM test_results WHERE plan_id = ? ORDER BY created_at",
+            (plan_id,)
+        ).fetchall()
+        return [dict(r) for r in rows]
+    finally:
+        conn.close()
+
+
+def list_test_results(limit=20):
+    init_db()
+    conn = _get_conn()
+    try:
+        rows = conn.execute(
+            """SELECT tr.*, tp.project_path, tp.language, tp.framework
+               FROM test_results tr
+               JOIN test_plans tp ON tr.plan_id = tp.id
+               ORDER BY tr.created_at DESC LIMIT ?""",
+            (limit,)
+        ).fetchall()
+        return [dict(r) for r in rows]
+    finally:
+        conn.close()
+
+
+def update_test_plan_status(plan_id, status):
+    init_db()
+    conn = _get_conn()
+    try:
+        conn.execute("UPDATE test_plans SET status = ? WHERE id = ?", (status, plan_id))
+        conn.commit()
     finally:
         conn.close()
