@@ -2162,24 +2162,32 @@ function onTestModeChange() {
 
 async function loadTestCommits() {
   const path = document.getElementById('testProjectPath').value.trim();
-  if (!path) return;
+  if (!path) {
+    document.getElementById('testCommitList').innerHTML = '<div style="text-align:center;padding:20px;color:var(--text-secondary);">请先输入或选择项目目录</div>';
+    return;
+  }
+  document.getElementById('testCommitList').innerHTML = '<div style="text-align:center;padding:20px;color:var(--text-secondary);">加载中...</div>';
   try {
-    const resp = await fetch('/api/git/commits?project_path=' + encodeURIComponent(path) + '&limit=20');
+    const resp = await fetch('/api/git/log?path=' + encodeURIComponent(path) + '&count=20');
     const data = await resp.json();
     const list = document.getElementById('testCommitList');
+    if (!data.is_git) {
+      list.innerHTML = '<div style="text-align:center;padding:20px;color:var(--red);">' + (data.error || '不是 git 仓库') + '</div>';
+      return;
+    }
     if (!data.commits || !data.commits.length) {
-      list.innerHTML = '<div style="text-align:center;padding:20px;color:var(--text-secondary);">无提交记录</div>';
+      list.innerHTML = '<div style="text-align:center;padding:20px;color:var(--text-secondary);">没有提交记录</div>';
       return;
     }
     list.innerHTML = data.commits.map((c, i) => 
-      '<div onclick="selectTestCommit('+i+')" data-sha="'+c.sha+'" style="padding:10px 14px;border-bottom:1px solid var(--border);cursor:pointer;display:flex;align-items:center;gap:10px;font-size:13px;'+(i===0?'background:var(--accent-bg);':'')+'">' +
+      '<div onclick="selectTestCommit('+i+')" data-sha="'+c.hash+'" style="padding:10px 14px;border-bottom:1px solid var(--border);cursor:pointer;display:flex;align-items:center;gap:10px;font-size:13px;">' +
       '<div style="flex:1;overflow:hidden;">' +
       '<div style="font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">'+c.message.split('\n')[0]+'</div>' +
-      '<div style="font-size:11px;color:var(--text-secondary);margin-top:2px;">'+c.sha.substring(0,7)+' · '+c.author+' · '+c.date+'</div>' +
+      '<div style="font-size:11px;color:var(--text-secondary);margin-top:2px;">'+c.hash.substring(0,7)+' · '+c.author+' · '+c.date+'</div>' +
       '</div></div>'
     ).join('');
   } catch(e) {
-    document.getElementById('testCommitList').innerHTML = '<div style="text-align:center;padding:20px;color:var(--red);">加载失败</div>';
+    document.getElementById('testCommitList').innerHTML = '<div style="text-align:center;padding:20px;color:var(--red);">加载失败: '+e.message+'</div>';
   }
 }
 
@@ -2188,7 +2196,7 @@ function selectTestCommit(index) {
   for (let el of items) el.style.background = '';
   items[index].style.background = 'var(--accent-bg)';
   const sha = items[index].dataset.sha;
-  document.getElementById('testDiffBase').value = sha + '~1';
+  document.getElementById('testDiffBase').value = sha + '^';
   document.getElementById('testDiffHead').value = sha;
 }
 
