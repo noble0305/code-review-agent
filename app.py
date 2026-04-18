@@ -18,6 +18,11 @@ from analyzer.prompts import (
 )
 from analyzer.git_diff import get_changed_files
 from analyzer.tasks import task_manager
+from analyzer import storage as db
+from analyzer.github_integration import (
+    verify_webhook_signature,
+    run_pr_analysis,
+)
 from analyzer.export import export_markdown, export_html
 from notifier.feishu import send_analysis_result
 
@@ -762,7 +767,16 @@ def fix_issue():
             fix_data['fix_description'] = str(parsed.get('fix_description', '') or '')
             fix_data['fixed_code'] = str(parsed.get('fixed_code', '') or '')
         else:
-            fix_data['analysis'] = raw
+            # JSON 解析失败，尝试从原始文本中提取代码块作为 fixed_code
+            fix_data['analysis'] = raw[:200] if raw else '解析失败'
+            fix_data['fix_description'] = 'LLM 返回格式异常，以下为原始建议'
+            # 尝试提取代码块
+            import re
+            code_match = re.search(r'```(?:\w+)?\n([\s\S]*?)```', raw or '')
+            if code_match:
+                fix_data['fixed_code'] = code_match.group(1).strip()
+            else:
+                fix_data['fixed_code'] = ''
 
         return jsonify({
             'file_path': os.path.relpath(resolved_file_path, project_root),
@@ -825,6 +839,67 @@ def _find_code_scope(lines: list, issue_line_0: int, language: str):
         end = start + 40
 
     return max(0, start), min(end, n)
+
+
+@app.route('/api/issue/apply-fix', methods=['POST'])
+def apply_fix():
+    """一键应用 AI 修复建议到源文件。"""
+    data = request.get_json()
+    project_path = data.get('project_path', '').strip()
+    file_path = data.get('file_path', '').strip()
+    fixed_code = data.get('fixed_code', '')
+    context_start = int(data.get('context_start', 0) or 0)
+    context_end = int(data.get('context_end', 0) or 0)
+
+    if not project_path or not file_path or not fixed_code:
+        return jsonify({'error': '缺少必要参数'}), 400
+
+    try:
+        project_root, resolved_file_path = _resolve_project_file_path(project_path, file_path)
+    except ValueError as e:
+        return jsonify({'error': str(e)}), 400
+
+    # 备份原文件
+    import shutil
+    backup_path = resolved_file_path + '.bak'
+    try:
+        shutil.copy2(resolved_file_path, backup_path)
+    except Exception as e:
+        return jsonify({'error': f'备份失败: {str(e)}'}), 500
+
+    # 读取文件并替换
+    try:
+        with open(resolved_file_path, 'r', encoding='utf-8') as f:
+            lines = f.readlines()
+
+        # context_start 和 context_end 是 1-indexed
+        start_idx = max(0, context_start - 1)
+        end_idx = min(len(lines), context_end)
+
+        # 替换指定范围的行
+        fixed_lines = fixed_code.splitlines(True)
+        if fixed_lines and not fixed_lines[-1].endswith('\n') and end_idx < len(lines):
+            fixed_lines[-1] += '\n'
+
+        new_lines = lines[:start_idx] + fixed_lines + lines[end_idx:]
+
+        with open(resolved_file_path, 'w', encoding='utf-8') as f:
+            f.writelines(new_lines)
+
+        return jsonify({
+            'success': True,
+            'backup_path': backup_path,
+            'file_path': os.path.relpath(resolved_file_path, project_root),
+            'lines_replaced': end_idx - start_idx,
+            'lines_written': len(fixed_lines)
+        })
+    except Exception as e:
+        try:
+            shutil.copy2(backup_path, resolved_file_path)
+        except Exception:
+            pass
+        return jsonify({'error': f'应用修复失败: {str(e)}'}), 500
+
 
 @app.route('/api/history', methods=['GET'])
 def api_history():
@@ -1112,6 +1187,205 @@ def git_log():
         return jsonify({'error': 'git 命令超时', 'is_git': False})
     except Exception as e:
         return jsonify({'error': str(e), 'is_git': False})
+
+
+# ===================== GitHub 集成 API =====================
+
+@app.route('/api/github/webhook', methods=['POST'])
+def github_webhook():
+    """接收 GitHub Webhook 事件。"""
+    # 获取原始 body 用于签名验证
+    payload_body = request.get_data()
+    signature = request.headers.get('X-Hub-Signature-256', '')
+    event = request.headers.get('X-GitHub-Event', '')
+
+    if event == 'ping':
+        return jsonify({'msg': 'pong'}), 200
+
+    if event != 'pull_request':
+        return jsonify({'msg': 'ignored'}), 200
+
+    data = request.get_json(silent=True) or {}
+    action = data.get('action', '')
+    if action not in ('opened', 'synchronize', 'reopened'):
+        return jsonify({'msg': f'action {action} ignored'}), 200
+
+    # 解析 PR 信息
+    pr = data.get('pull_request', {})
+    repo = data.get('repository', {})
+    repo_full_name = repo.get('full_name', '')
+    pr_number = pr.get('number', 0)
+    head_sha = pr.get('head', {}).get('sha', '')
+    head_branch = pr.get('head', {}).get('ref', '')
+    clone_url = pr.get('head', {}).get('repo', {}).get('clone_url', '')
+
+    if not repo_full_name or not pr_number:
+        return jsonify({'error': '无效的 PR 数据'}), 400
+
+    # 查找集成配置
+    integration = db.get_integration(repo_full_name)
+    if not integration:
+        return jsonify({'error': f'未配置的仓库: {repo_full_name}'}), 404
+
+    # 验证签名
+    if not verify_webhook_signature(integration['webhook_secret'], payload_body, signature):
+        return jsonify({'error': '签名验证失败'}), 403
+
+    # 创建 PR 审查记录
+    review_id = db.save_pr_review(
+        integration_id=integration['id'],
+        pr_number=pr_number,
+        commit_sha=head_sha,
+        status='pending'
+    )
+
+    # 异步执行分析
+    def _run():
+        try:
+            db.update_pr_review_status(review_id, 'running')
+            result = run_pr_analysis(
+                token=integration['github_token'],
+                repo_full_name=repo_full_name,
+                pr_number=pr_number,
+                clone_url=clone_url,
+                head_branch=head_branch,
+            )
+            if result.get('status') == 'completed':
+                db.update_pr_review_status(
+                    review_id, 'completed',
+                    total_score=result.get('total_score'),
+                    comment_id=result.get('comment_id')
+                )
+            else:
+                db.update_pr_review_status(review_id, 'failed')
+        except Exception as e:
+            db.update_pr_review_status(review_id, 'failed')
+
+    thread = threading.Thread(target=_run, daemon=True)
+    thread.start()
+
+    return jsonify({'msg': '分析已启动', 'review_id': review_id}), 200
+
+
+@app.route('/api/github/config', methods=['GET'])
+def github_config_list():
+    """获取所有 GitHub 集成配置。"""
+    integrations = db.list_integrations()
+    return jsonify(integrations)
+
+
+@app.route('/api/github/config', methods=['POST'])
+def github_config_save():
+    """保存 GitHub 集成配置。"""
+    data = request.get_json() or {}
+    repo = data.get('repo_full_name', '').strip()
+    secret = data.get('webhook_secret', '').strip()
+    token = data.get('github_token', '').strip()
+    auto = data.get('auto_comment', True)
+
+    if not repo or not secret or not token:
+        return jsonify({'error': '仓库、Webhook Secret、GitHub Token 均为必填'}), 400
+
+    # 校验格式 owner/repo
+    if '/' not in repo or len(repo.split('/')) != 2:
+        return jsonify({'error': '仓库格式应为 owner/repo'}), 400
+
+    integ_id = db.save_integration(repo, secret, token, auto)
+    return jsonify({'id': integ_id, 'repo_full_name': repo}), 201
+
+
+@app.route('/api/github/config/<int:integ_id>', methods=['DELETE'])
+def github_config_delete(integ_id):
+    """删除 GitHub 集成配置。"""
+    if db.delete_integration(integ_id):
+        return jsonify({'msg': '已删除'})
+    return jsonify({'error': '未找到'}), 404
+
+
+@app.route('/api/github/test', methods=['POST'])
+def github_test():
+    """测试 GitHub Token 连通性。"""
+    data = request.get_json() or {}
+    token = data.get('github_token', '').strip()
+    repo = data.get('repo_full_name', '').strip()
+
+    if not token:
+        return jsonify({'error': '请提供 Token'}), 400
+
+    try:
+        from github import Github
+        g = Github(token)
+        user = g.get_user()
+        login = user.login
+
+        result = {'ok': True, 'user': login}
+
+        if repo:
+            r = g.get_repo(repo)
+            result['repo'] = {'name': r.full_name, 'private': r.private}
+
+        return jsonify(result)
+    except ImportError:
+        return jsonify({'error': 'PyGithub 未安装，请运行: pip install PyGithub'}), 500
+    except Exception as e:
+        return jsonify({'ok': False, 'error': str(e)}), 400
+
+
+@app.route('/api/github/reviews', methods=['GET'])
+def github_pr_reviews():
+    """获取 PR 审查历史。"""
+    integ_id = request.args.get('integration_id', type=int)
+    limit = request.args.get('limit', 50, type=int)
+    reviews = db.list_pr_reviews(integration_id=integ_id, limit=limit)
+    return jsonify(reviews)
+
+
+# ===================== 自定义规则 API =====================
+
+@app.route('/api/rules', methods=['GET'])
+def rules_list():
+    """列出所有规则。"""
+    dimension = request.args.get('dimension')
+    rules = db.list_rules(dimension=dimension)
+    return jsonify(rules)
+
+
+@app.route('/api/rules', methods=['POST'])
+def rules_create():
+    """创建自定义规则。"""
+    data = request.get_json() or {}
+    name = data.get('name', '').strip()
+    dimension = data.get('dimension', '').strip()
+    if not name or not dimension:
+        return jsonify({'error': '规则名称和维度为必填'}), 400
+
+    rule_id = db.save_rule(
+        name=name,
+        dimension=dimension,
+        severity=data.get('severity', 'warning'),
+        pattern=data.get('pattern', ''),
+        description=data.get('description', ''),
+        enabled=data.get('enabled', True),
+        weight=data.get('weight', 1.0),
+    )
+    return jsonify({'id': rule_id}), 201
+
+
+@app.route('/api/rules/<int:rule_id>', methods=['PATCH'])
+def rules_update(rule_id):
+    """更新规则。"""
+    data = request.get_json() or {}
+    if db.update_rule(rule_id, **data):
+        return jsonify({'msg': '已更新'})
+    return jsonify({'error': '未找到'}), 404
+
+
+@app.route('/api/rules/<int:rule_id>', methods=['DELETE'])
+def rules_delete(rule_id):
+    """删除规则。"""
+    if db.delete_rule(rule_id):
+        return jsonify({'msg': '已删除'})
+    return jsonify({'error': '未找到'}), 404
 
 
 if __name__ == '__main__':

@@ -4,3 +4,4 @@ semgrep
 openai>=1.0
 anthropic>=0.30
 pyyaml>=6.0
+PyGithub>=2.0

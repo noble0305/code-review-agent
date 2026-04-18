@@ -32,9 +32,10 @@ select {
 select:focus { border-color: var(--accent); }
 button {
   padding: 10px 24px; background: #238636; color: #fff; border: none; border-radius: 6px;
-  font-size: 14px; font-weight: 600; cursor: pointer; transition: background .2s;
+  font-size: 14px; font-weight: 600; cursor: pointer; transition: background .2s, transform .1s;
 }
 button:hover { background: #2ea043; }
+button:active { transform: scale(0.97); }
 button:disabled { background: #21262d; color: var(--text-muted); cursor: not-allowed; }
 .progress { display: none; margin: 20px 0; }
 .progress-bar { height: 4px; background: var(--surface); border-radius: 2px; overflow: hidden; }
@@ -60,17 +61,21 @@ button:disabled { background: #21262d; color: var(--text-muted); cursor: not-all
 .results { display: none; margin-top: 32px; }
 .score-section { display: flex; gap: 24px; margin-bottom: 32px; flex-wrap: wrap; align-items: flex-start; }
 .score-circle {
-  width: 140px; height: 140px; border-radius: 50%; display: flex; flex-direction: column;
-  align-items: center; justify-content: center; border: 4px solid var(--border);
-  flex-shrink: 0;
+  width: 160px; height: 160px; border-radius: 50%; display: flex; flex-direction: column;
+  align-items: center; justify-content: center;
+  flex-shrink: 0; position: relative;
 }
-.score-number { font-size: 42px; font-weight: 700; }
-.score-label { font-size: 13px; color: var(--text-muted); }
+.score-circle svg { position: absolute; top: 0; left: 0; transform: rotate(-90deg); }
+.score-circle .score-track { fill: none; stroke: var(--border); stroke-width: 6; }
+.score-circle .score-progress { fill: none; stroke-width: 6; stroke-linecap: round; transition: stroke-dashoffset 1.2s ease-out, stroke 0.5s; }
+.score-number { font-size: 42px; font-weight: 700; z-index: 1; }
+.score-label { font-size: 13px; color: var(--text-muted); z-index: 1; }
 .summary-cards { display: flex; gap: 12px; flex-wrap: wrap; flex: 1; }
 .summary-card {
   background: var(--surface); border: 1px solid var(--border); border-radius: 8px;
-  padding: 14px 18px; min-width: 120px;
+  padding: 14px 18px; min-width: 120px; transition: transform .2s, box-shadow .2s;
 }
+.summary-card:hover { transform: translateY(-2px); box-shadow: 0 4px 16px rgba(0,0,0,0.3); }
 .summary-card .label { font-size: 12px; color: var(--text-muted); }
 .summary-card .value { font-size: 22px; font-weight: 600; margin-top: 4px; }
 
@@ -99,7 +104,8 @@ button:disabled { background: #21262d; color: var(--text-muted); cursor: not-all
 .dim-name { font-weight: 600; }
 .dim-score { color: var(--text-muted); }
 .dim-bar { height: 8px; background: var(--surface); border-radius: 4px; overflow: hidden; }
-.dim-fill { height: 100%; border-radius: 4px; transition: width .5s ease; }
+.dim-fill { height: 100%; border-radius: 4px; transition: width .8s ease-out; position: relative; }
+.dim-fill::after { content: ''; position: absolute; right: 0; top: 0; height: 100%; width: 20px; background: linear-gradient(90deg, transparent, rgba(255,255,255,0.15)); border-radius: 0 4px 4px 0; }
 .dim-details { font-size: 12px; color: var(--text-muted); margin-top: 4px; }
 
 .issues-section h2 { font-size: 20px; margin-bottom: 16px; }
@@ -112,9 +118,9 @@ button:disabled { background: #21262d; color: var(--text-muted); cursor: not-all
 .issue-list { list-style: none; }
 .issue-item {
   background: var(--surface); border: 1px solid var(--border); border-radius: 8px;
-  padding: 14px 18px; margin-bottom: 10px; transition: border-color .2s;
+  padding: 14px 18px; margin-bottom: 10px; transition: border-color .2s, box-shadow .2s;
 }
-.issue-item:hover { border-color: var(--text-muted); }
+.issue-item:hover { border-color: var(--text-muted); box-shadow: 0 2px 12px rgba(0,0,0,0.2); }
 .issue-header { display: flex; align-items: center; gap: 10px; margin-bottom: 6px; font-size: 14px; }
 .issue-file { color: var(--accent); font-family: 'SF Mono', Consolas, monospace; font-size: 13px; }
 .issue-desc { font-size: 14px; margin-bottom: 4px; }
@@ -255,6 +261,8 @@ button:disabled { background: #21262d; color: var(--text-muted); cursor: not-all
     <div class="tab-nav" style="display:flex;gap:0;margin-bottom:20px;border-bottom:1px solid var(--border);">
       <button class="tab-btn active" onclick="switchTab('analysis')" id="tabAnalysis" style="padding:10px 20px;background:none;border:none;border-bottom:2px solid var(--accent);color:var(--text);font-size:14px;cursor:pointer;">🔍 代码审查</button>
       <button class="tab-btn" onclick="switchTab('history')" id="tabHistory" style="padding:10px 20px;background:none;border:none;border-bottom:2px solid transparent;color:var(--text-muted);font-size:14px;cursor:pointer;">📈 历史趋势</button>
+      <button class="tab-btn" onclick="switchTab('github')" id="tabGithub" style="padding:10px 20px;background:none;border:none;border-bottom:2px solid transparent;color:var(--text-muted);font-size:14px;cursor:pointer;">🔗 GitHub集成</button>
+      <button class="tab-btn" onclick="switchTab('rules')" id="tabRules" style="padding:10px 20px;background:none;border:none;border-bottom:2px solid transparent;color:var(--text-muted);font-size:14px;cursor:pointer;">⚙️ 规则配置</button>
     </div>
 
     <div id="panelAnalysis">
@@ -439,7 +447,7 @@ button:disabled { background: #21262d; color: var(--text-muted); cursor: not-all
         let html = '';
         data.commits.forEach((c, idx) => {
           const isFirst = idx === 0;
-          html += `<div class="commit-item" data-hash="${c.hash}" data-parent="${c.hash}" onclick="selectCommit(this)" style="padding:10px 14px;cursor:pointer;border-bottom:1px solid var(--border);transition:background .15s;" onmouseover="this.style.background='var(--hover)'" onmouseout="this.style.background='transparent'">
+          html += `<div class="commit-item" data-hash="${c.hash}" data-parent="${c.hash}" onclick="selectCommit(this)" style="padding:10px 14px;cursor:pointer;border-bottom:1px solid var(--border);border-left:3px solid transparent;transition:all .15s;" onmouseover="if(!this.dataset.selected)this.style.background='rgba(139,148,158,0.1)'" onmouseout="if(!this.dataset.selected)this.style.background='transparent'">
             <div style="display:flex;align-items:center;gap:8px;">
               <span style="font-family:monospace;font-size:12px;color:var(--primary);background:rgba(99,102,241,0.1);padding:2px 6px;border-radius:4px;">${c.short_hash}</span>
               <span style="font-size:13px;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${escapeHtml(c.message)}</span>
@@ -459,11 +467,27 @@ button:disabled { background: #21262d; color: var(--text-muted); cursor: not-all
       // 取消之前的选中
       document.querySelectorAll('.commit-item').forEach(e => {
         e.style.background = 'transparent';
-        e.style.borderLeft = 'none';
+        e.style.borderLeft = '3px solid transparent';
+        e.style.boxShadow = 'none';
+        delete e.dataset.selected;
+        const check = e.querySelector('.commit-check');
+        if (check) check.style.display = 'none';
       });
       // 高亮当前选中
-      el.style.background = 'var(--hover)';
-      el.style.borderLeft = '3px solid var(--primary)';
+      el.style.background = 'rgba(88, 166, 255, 0.12)';
+      el.style.borderLeft = '3px solid #58a6ff';
+      el.style.boxShadow = '0 0 0 1px rgba(88, 166, 255, 0.3)';
+      el.dataset.selected = 'true';
+      // 显示选中勾
+      let check = el.querySelector('.commit-check');
+      if (!check) {
+        check = document.createElement('span');
+        check.className = 'commit-check';
+        check.style.cssText = 'margin-left:auto;color:#58a6ff;font-size:16px;font-weight:bold;';
+        check.textContent = '✓';
+        el.querySelector('div').appendChild(check);
+      }
+      check.style.display = 'inline';
       selectedCommit = el.dataset.hash;
     }
 
@@ -554,14 +578,152 @@ button:disabled { background: #21262d; color: var(--text-muted); cursor: not-all
 
     <div id="panelHistory" style="display:none;">
       <h2 style="font-size:20px;margin-bottom:16px;">📈 历史趋势</h2>
-      <div style="display:flex;gap:12px;margin-bottom:20px;">
-        <input type="text" id="historyProjectFilter" placeholder="按项目路径筛选" style="flex:1;padding:10px 14px;background:var(--surface);border:1px solid var(--border);border-radius:6px;color:var(--text);font-size:14px;outline:none;" />
+      <div style="display:flex;gap:12px;margin-bottom:20px;flex-wrap:wrap;">
+        <input type="text" id="historyProjectFilter" placeholder="按项目路径筛选" style="flex:1;min-width:200px;padding:10px 14px;background:var(--surface);border:1px solid var(--border);border-radius:6px;color:var(--text);font-size:14px;outline:none;" />
         <button onclick="loadHistory()" style="padding:10px 20px;">加载</button>
       </div>
-      <div style="position:relative;height:400px;background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:20px;">
+      <!-- 统计卡片 -->
+      <div id="historyStats" style="display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:24px;"></div>
+
+      <!-- 项目对比 -->
+      <div style="background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:20px;margin-bottom:24px;">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;">
+          <h3 style="font-size:15px;color:var(--text-muted);">📊 项目对比</h3>
+          <button onclick="toggleProjectPicker()" style="padding:4px 12px;font-size:12px;background:var(--bg);border:1px solid var(--border);border-radius:6px;color:var(--text);cursor:pointer;">选择项目 ▾</button>
+        </div>
+        <div id="projectPicker" style="display:none;margin-bottom:16px;max-height:150px;overflow-y:auto;background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:10px;"></div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;">
+          <div style="position:relative;height:260px;"><canvas id="compareBarChart"></canvas></div>
+          <div style="position:relative;height:260px;"><canvas id="compareTrendChart"></canvas></div>
+        </div>
+        <div id="compareTable" style="margin-top:16px;"></div>
+      </div>
+
+      <!-- 评分趋势折线图 -->
+      <div style="position:relative;height:350px;background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:20px;margin-bottom:24px;">
         <canvas id="trendChart"></canvas>
       </div>
+      <!-- 维度雷达图 -->
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:20px;margin-bottom:24px;">
+        <div style="background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:20px;">
+          <h3 style="font-size:15px;margin-bottom:12px;color:var(--text-muted);">🎯 最新分析维度评分</h3>
+          <div style="position:relative;height:280px;"><canvas id="radarChart"></canvas></div>
+        </div>
+        <div style="background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:20px;">
+          <h3 style="font-size:15px;margin-bottom:12px;color:var(--text-muted);">📊 问题严重程度分布</h3>
+          <div style="position:relative;height:280px;"><canvas id="severityChart"></canvas></div>
+        </div>
+      </div>
       <div id="historyTable" style="margin-top:20px;"></div>
+    </div>
+
+    <!-- GitHub 集成配置 -->
+    <div id="panelGithub" style="display:none;">
+      <h2 style="font-size:20px;margin-bottom:16px;">🔗 GitHub PR 集成配置</h2>
+      <p style="color:var(--text-muted);font-size:13px;margin-bottom:20px;">配置 Webhook 后，PR 提交时自动触发代码审查，结果评论到 PR。</p>
+
+      <!-- 新增配置表单 -->
+      <div style="background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:20px;margin-bottom:24px;">
+        <h3 style="font-size:15px;margin-bottom:16px;">➕ 添加仓库</h3>
+        <div style="display:grid;gap:12px;">
+          <div>
+            <label style="font-size:13px;color:var(--text-muted);display:block;margin-bottom:4px;">仓库 (owner/repo)</label>
+            <input type="text" id="ghRepo" placeholder="noble0305/code-review-agent" style="width:100%;padding:10px 14px;background:var(--bg);border:1px solid var(--border);border-radius:6px;color:var(--text);font-size:14px;outline:none;" />
+          </div>
+          <div>
+            <label style="font-size:13px;color:var(--text-muted);display:block;margin-bottom:4px;">Webhook Secret</label>
+            <input type="password" id="ghSecret" placeholder="在 GitHub 仓库 Settings → Webhooks 中设置" style="width:100%;padding:10px 14px;background:var(--bg);border:1px solid var(--border);border-radius:6px;color:var(--text);font-size:14px;outline:none;" />
+          </div>
+          <div>
+            <label style="font-size:13px;color:var(--text-muted);display:block;margin-bottom:4px;">GitHub Token (需要 repo 权限)</label>
+            <input type="password" id="ghToken" placeholder="ghp_xxxx..." style="width:100%;padding:10px 14px;background:var(--bg);border:1px solid var(--border);border-radius:6px;color:var(--text);font-size:14px;outline:none;" />
+          </div>
+          <div style="display:flex;gap:10px;align-items:center;">
+            <button onclick="saveGithubConfig()" style="padding:10px 24px;">💾 保存配置</button>
+            <button onclick="testGithubConn()" style="padding:10px 24px;background:#1f6feb;">🧪 测试连通</button>
+            <span id="ghTestResult" style="font-size:13px;"></span>
+          </div>
+        </div>
+      </div>
+
+      <!-- 已配置的仓库列表 -->
+      <div style="background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:20px;margin-bottom:24px;">
+        <h3 style="font-size:15px;margin-bottom:16px;">📋 已配置的仓库</h3>
+        <div id="ghIntegrations" style="color:var(--text-muted);font-size:14px;">加载中...</div>
+      </div>
+
+      <!-- Webhook 配置提示 -->
+      <div style="background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:20px;margin-bottom:24px;">
+        <h3 style="font-size:15px;margin-bottom:12px;">📖 配置指南</h3>
+        <ol style="color:var(--text);font-size:13px;line-height:2;padding-left:20px;">
+          <li>在上方填写仓库信息并保存</li>
+          <li>前往 GitHub 仓库 → <strong>Settings → Webhooks → Add webhook</strong></li>
+          <li><strong>Payload URL</strong>: <code style="background:var(--bg);padding:2px 8px;border-radius:4px;">http://你的服务器:5001/api/github/webhook</code></li>
+          <li><strong>Content type</strong>: application/json</li>
+          <li><strong>Secret</strong>: 填入你设置的 Webhook Secret</li>
+          <li><strong>Events</strong>: 勾选 "Pull requests"</li>
+          <li>保存后推送一个 PR 测试</li>
+        </ol>
+      </div>
+
+      <!-- PR 审查历史 -->
+      <div style="background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:20px;">
+        <h3 style="font-size:15px;margin-bottom:16px;">📝 PR 审查历史</h3>
+        <div id="ghReviews" style="color:var(--text-muted);font-size:14px;">加载中...</div>
+      </div>
+    </div>
+
+    <!-- 规则配置 -->
+    <div id="panelRules" style="display:none;">
+      <h2 style="font-size:20px;margin-bottom:16px;">⚙️ 自定义规则配置</h2>
+      <p style="color:var(--text-muted);font-size:13px;margin-bottom:20px;">管理审查规则：启用/禁用、调整权重、添加自定义检查。</p>
+
+      <!-- 新增规则 -->
+      <div style="background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:20px;margin-bottom:24px;">
+        <h3 style="font-size:15px;margin-bottom:16px;">➕ 添加自定义规则</h3>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
+          <div>
+            <label style="font-size:12px;color:var(--text-muted);display:block;margin-bottom:4px;">规则名称</label>
+            <input type="text" id="ruleName" placeholder="禁止 print 调试语句" style="width:100%;padding:8px 12px;background:var(--bg);border:1px solid var(--border);border-radius:6px;color:var(--text);font-size:13px;" />
+          </div>
+          <div>
+            <label style="font-size:12px;color:var(--text-muted);display:block;margin-bottom:4px;">维度</label>
+            <select id="ruleDimension" style="width:100%;padding:8px 12px;background:var(--bg);border:1px solid var(--border);border-radius:6px;color:var(--text);font-size:13px;">
+              <option value="maintainability">可维护性</option>
+              <option value="reliability">可靠性</option>
+              <option value="security">安全性</option>
+              <option value="performance">性能</option>
+              <option value="readability">可读性</option>
+              <option value="complexity">复杂度</option>
+            </select>
+          </div>
+          <div>
+            <label style="font-size:12px;color:var(--text-muted);display:block;margin-bottom:4px;">匹配模式（正则）</label>
+            <input type="text" id="rulePattern" placeholder="print\\(" style="width:100%;padding:8px 12px;background:var(--bg);border:1px solid var(--border);border-radius:6px;color:var(--text);font-size:13px;font-family:monospace;" />
+          </div>
+          <div>
+            <label style="font-size:12px;color:var(--text-muted);display:block;margin-bottom:4px;">严重程度</label>
+            <select id="ruleSeverity" style="width:100%;padding:8px 12px;background:var(--bg);border:1px solid var(--border);border-radius:6px;color:var(--text);font-size:13px;">
+              <option value="info">🔵 建议</option>
+              <option value="warning" selected>🟡 警告</option>
+              <option value="critical">🔴 严重</option>
+            </select>
+          </div>
+          <div style="grid-column:1/-1;">
+            <label style="font-size:12px;color:var(--text-muted);display:block;margin-bottom:4px;">描述</label>
+            <input type="text" id="ruleDesc" placeholder="代码中不应包含 print 调试语句" style="width:100%;padding:8px 12px;background:var(--bg);border:1px solid var(--border);border-radius:6px;color:var(--text);font-size:13px;" />
+          </div>
+          <div style="grid-column:1/-1;">
+            <button onclick="createRule()" style="padding:8px 20px;">💾 保存规则</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- 规则列表 -->
+      <div style="background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:20px;">
+        <h3 style="font-size:15px;margin-bottom:16px;">📋 规则列表</h3>
+        <div id="rulesList" style="color:var(--text-muted);font-size:14px;">加载中...</div>
+      </div>
     </div>
   </div>
 
@@ -756,15 +918,56 @@ function scoreColor(score) {
   return '#f85149';
 }
 
+function scoreGradient(score) {
+  if (score >= 80) return 'url(#gradGreen)';
+  if (score >= 60) return 'url(#gradYellow)';
+  return 'url(#gradRed)';
+}
+
+function renderScoreCircle(score) {
+  const color = scoreColor(score);
+  const r = 72, c = 2 * Math.PI * r;
+  const offset = c - (c * score / 100);
+  return `
+    <svg width="160" height="160" viewBox="0 0 160 160">
+      <defs>
+        <linearGradient id="gradGreen" x1="0%" y1="0%" x2="100%" y2="0%">
+          <stop offset="0%" stop-color="#3fb950"/>
+          <stop offset="100%" stop-color="#58d68d"/>
+        </linearGradient>
+        <linearGradient id="gradYellow" x1="0%" y1="0%" x2="100%" y2="0%">
+          <stop offset="0%" stop-color="#d29922"/>
+          <stop offset="100%" stop-color="#f0c040"/>
+        </linearGradient>
+        <linearGradient id="gradRed" x1="0%" y1="0%" x2="100%" y2="0%">
+          <stop offset="0%" stop-color="#f85149"/>
+          <stop offset="100%" stop-color="#ff7b73"/>
+        </linearGradient>
+      </defs>
+      <circle cx="80" cy="80" r="${r}" class="score-track"/>
+      <circle cx="80" cy="80" r="${r}" class="score-progress"
+        stroke="${color}" stroke-dasharray="${c}" stroke-dashoffset="${c}"
+        id="scoreArc" />
+    </svg>`;
+}
+
 function renderResults(data) {
   document.getElementById('results').style.display = 'block';
   currentProjectPath = data.project_path || document.getElementById('projectPath').value.trim();
   const score = data.total_score;
   const color = scoreColor(score);
 
-  document.getElementById('totalScore').textContent = score;
-  document.getElementById('scoreCircle').style.borderColor = color;
-  document.getElementById('totalScore').style.color = color;
+  const scoreEl = document.getElementById('scoreCircle');
+  scoreEl.innerHTML = renderScoreCircle(score) + `<span class="score-number" id="totalScore" style="color:${color}">${score}</span><span class="score-label">总体评分</span>`;
+  // Animate the arc
+  requestAnimationFrame(() => {
+    const arc = document.getElementById('scoreArc');
+    if (arc) {
+      const r = 72, c = 2 * Math.PI * r;
+      const targetOffset = c - (c * score / 100);
+      arc.style.strokeDashoffset = targetOffset;
+    }
+  });
 
   // Summary cards
   const criticals = data.all_issues.filter(i => i.severity === 'critical').length;
@@ -850,10 +1053,13 @@ function explainIssue(file, line, description, idx) {
     if (data.error) {
       explanationEl.innerHTML = `<span style="color:var(--red)">错误: ${data.error}</span>`;
     } else {
-      explanationEl.innerHTML = data.explanation;
-      if (data.code_context) {
-        explanationEl.innerHTML += `<pre><code>${escapeHtml(data.code_context)}</code></pre>`;
-      }
+      // 将解释文字渲染为格式化内容（支持 Markdown 粗体）
+      let content = escapeHtml(data.explanation || '');
+      // 简单 Markdown 粗体支持
+      content = content.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+      // 换行转 <br>
+      content = content.replace(/\n/g, '<br>');
+      explanationEl.innerHTML = content;
     }
   })
   .catch(err => {
@@ -917,10 +1123,75 @@ function fixIssue(file, line, description, idx, severity) {
     }
 
     html += '</div>';
+
+    // 应用修复按钮
+    if (data.fixed_code) {
+      html += `<div style="padding:12px 14px;border-top:1px solid var(--border);display:flex;gap:10px;align-items:center;">
+        <button onclick="applyFix('${escapeHtml(data.file_path || file)}', '${escapeHtml(data.file_name || '')}', ${data.context_start || 0}, ${data.context_end || 0}, this)"
+          style="padding:8px 18px;background:#238636;border:none;border-radius:6px;color:#fff;cursor:pointer;font-size:13px;font-weight:600;transition:all .2s;"
+          data-fixed-code="" id="applyFixBtn-${Date.now()}">
+          ✅ 应用修复
+        </button>
+        <span style="font-size:12px;color:var(--text-muted);">⚠️ 将直接修改源文件（自动备份 .bak）</span>
+      </div>`;
+      // Store fixed_code in a global map for retrieval
+      window._fixData = window._fixData || {};
+      const fixId = 'fix-' + Date.now();
+      window._fixData[fixId] = data.fixed_code;
+      // Update button to carry fixId
+      html = html.replace('id="applyFixBtn-' + Date.now() + '"', 'data-fix-id="' + fixId + '"');
+    }
+
+    html += '</div>';
     fixEl.innerHTML = html;
+    // Attach the fixed_code to the button
+    if (data.fixed_code) {
+      const btn = fixEl.querySelector('button[data-fix-id]');
+      if (btn) btn.setAttribute('data-fixed-code', encodeURIComponent(data.fixed_code));
+    }
   })
   .catch(err => {
     fixEl.innerHTML = `<div class="diff-container"><div class="diff-header" style="color:#f85149;">❌ 请求失败: ${err.message}</div></div>`;
+  });
+}
+
+function applyFix(filePath, fileName, contextStart, contextEnd, btn) {
+  if (!confirm('确认应用此修复？\n源文件将被修改（自动备份为 .bak）')) return;
+
+  const fixedCode = decodeURIComponent(btn.getAttribute('data-fixed-code') || '');
+  if (!fixedCode) { alert('修复内容为空'); return; }
+
+  btn.disabled = true;
+  btn.textContent = '⏳ 应用中...';
+
+  fetch('/api/issue/apply-fix', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      project_path: currentProjectPath || document.getElementById('projectPath').value.trim(),
+      file_path: filePath,
+      fixed_code: fixedCode,
+      context_start: contextStart,
+      context_end: contextEnd
+    })
+  })
+  .then(r => r.json())
+  .then(data => {
+    if (data.error) {
+      btn.textContent = '❌ 失败';
+      btn.style.background = '#f85149';
+      alert('修复失败: ' + data.error);
+      setTimeout(() => { btn.disabled = false; btn.textContent = '✅ 应用修复'; btn.style.background = '#238636'; }, 2000);
+    } else {
+      btn.textContent = '✅ 已应用';
+      btn.style.background = '#1a7f37';
+    }
+  })
+  .catch(err => {
+    btn.textContent = '❌ 失败';
+    btn.style.background = '#f85149';
+    alert('请求失败: ' + err.message);
+    setTimeout(() => { btn.disabled = false; btn.textContent = '✅ 应用修复'; btn.style.background = '#238636'; }, 2000);
   });
 }
 
@@ -1087,6 +1358,12 @@ function clearChat() {
 
 // History & Export functions
 let trendChart = null;
+let radarChart = null;
+let severityChart = null;
+let compareBarChart = null;
+let compareTrendChart = null;
+let allHistoryRecords = [];
+let selectedProjects = new Set();
 let currentAnalysisId = null;
 
 function switchTab(tab) {
@@ -1097,7 +1374,12 @@ function switchTab(tab) {
   });
   document.getElementById('panelAnalysis').style.display = tab === 'analysis' ? '' : 'none';
   document.getElementById('panelHistory').style.display = tab === 'history' ? '' : 'none';
-  const btn = tab === 'analysis' ? document.getElementById('tabAnalysis') : document.getElementById('tabHistory');
+  document.getElementById('panelGithub').style.display = tab === 'github' ? '' : 'none';
+  if (tab === 'github') { loadGithubIntegrations(); loadGithubReviews(); }
+  document.getElementById('panelRules').style.display = tab === 'rules' ? '' : 'none';
+  if (tab === 'rules') { loadRules(); }
+  const btnMap = { analysis: 'tabAnalysis', history: 'tabHistory', github: 'tabGithub', rules: 'tabRules' };
+  const btn = document.getElementById(btnMap[tab]);
   btn.style.borderBottomColor = 'var(--accent)';
   btn.style.color = 'var(--text)';
   btn.classList.add('active');
@@ -1112,8 +1394,11 @@ async function loadHistory() {
   try {
     const res = await fetch('/api/history?' + params);
     const data = await res.json();
+    allHistoryRecords = data;
     renderTrendChart(data);
     renderHistoryTable(data);
+    renderProjectPicker(data);
+    renderCompareCharts(data);
   } catch (e) {
     document.getElementById('historyTable').innerHTML = '<p style="color:var(--red)">加载失败: ' + e.message + '</p>';
   }
@@ -1122,11 +1407,27 @@ async function loadHistory() {
 function renderTrendChart(records) {
   const ctx = document.getElementById('trendChart').getContext('2d');
   if (trendChart) trendChart.destroy();
-  
+  if (radarChart) radarChart.destroy();
+  if (severityChart) severityChart.destroy();
+
   records = records.reverse();
-  const labels = records.map(r => (r.created_at || '').substring(0, 10));
+  const labels = records.map(r => (r.created_at || '').substring(5, 16));
   const scores = records.map(r => r.total_score);
-  
+
+  // 统计卡片
+  if (records.length) {
+    const avg = (scores.reduce((a, b) => a + b, 0) / scores.length).toFixed(1);
+    const max = Math.max(...scores).toFixed(1);
+    const min = Math.min(...scores).toFixed(1);
+    document.getElementById('historyStats').innerHTML = [
+      { label: '📊 分析次数', value: records.length, color: 'var(--accent)' },
+      { label: '📈 平均分', value: avg, color: scoreColor(parseFloat(avg)) },
+      { label: '🏆 最高分', value: max, color: '#3fb950' },
+      { label: '📉 最低分', value: min, color: '#f85149' },
+    ].map(s => `<div class="summary-card" style="text-align:center;"><div class="label">${s.label}</div><div class="value" style="color:${s.color};margin-top:4px;">${s.value}</div></div>`).join('');
+  }
+
+  // 趋势折线图
   trendChart = new Chart(ctx, {
     type: 'line',
     data: {
@@ -1135,9 +1436,13 @@ function renderTrendChart(records) {
         label: '总分',
         data: scores,
         borderColor: '#58a6ff',
-        backgroundColor: 'rgba(88,166,255,0.1)',
+        backgroundColor: 'rgba(88,166,255,0.08)',
         fill: true,
-        tension: 0.3,
+        tension: 0.4,
+        pointBackgroundColor: scores.map(s => scoreColor(s)),
+        pointRadius: 5,
+        pointHoverRadius: 7,
+        borderWidth: 2.5,
       }]
     },
     options: {
@@ -1145,10 +1450,93 @@ function renderTrendChart(records) {
       maintainAspectRatio: false,
       scales: {
         y: { beginAtZero: true, max: 100, grid: { color: '#30363d' }, ticks: { color: '#8b949e' } },
-        x: { grid: { color: '#30363d' }, ticks: { color: '#8b949e' } }
+        x: { grid: { color: '#30363d' }, ticks: { color: '#8b949e', maxRotation: 45 } }
       },
+      plugins: { legend: { labels: { color: '#c9d1d9' } }, tooltip: { backgroundColor: '#161b22', borderColor: '#30363d', borderWidth: 1 } }
+    }
+  });
+
+  // 雷达图（最新一次分析的维度）
+  if (records.length) {
+    loadRadarChart(records[records.length - 1].id);
+  }
+
+  // 严重程度饼图
+  renderSeverityDistribution(records);
+}
+
+async function loadRadarChart(analysisId) {
+  try {
+    const res = await fetch('/api/history/' + analysisId);
+    const data = await res.json();
+    if (!data.dimensions) return;
+
+    const rctx = document.getElementById('radarChart').getContext('2d');
+    radarChart = new Chart(rctx, {
+      type: 'radar',
+      data: {
+        labels: data.dimensions.map(d => d.name),
+        datasets: [{
+          label: '维度评分',
+          data: data.dimensions.map(d => d.score),
+          borderColor: '#58a6ff',
+          backgroundColor: 'rgba(88,166,255,0.15)',
+          pointBackgroundColor: data.dimensions.map(d => scoreColor(d.score)),
+          pointRadius: 4,
+          borderWidth: 2,
+        }]
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        scales: {
+          r: {
+            beginAtZero: true, max: 100,
+            grid: { color: '#30363d' },
+            angleLines: { color: '#30363d' },
+            pointLabels: { color: '#c9d1d9', font: { size: 12 } },
+            ticks: { color: '#8b949e', backdropColor: 'transparent' }
+          }
+        },
+        plugins: { legend: { labels: { color: '#c9d1d9' } } }
+      }
+    });
+  } catch (e) { console.error('Radar chart error:', e); }
+}
+
+function renderSeverityDistribution(records) {
+  // 从所有记录的 dimensions 中统计 severity
+  let critical = 0, warning = 0, info = 0;
+  records.forEach(r => {
+    if (r.dimensions) {
+      r.dimensions.forEach(d => {
+        (d.issues || []).forEach(i => {
+          if (i.severity === 'critical') critical++;
+          else if (i.severity === 'warning') warning++;
+          else info++;
+        });
+      });
+    }
+  });
+
+  const sctx = document.getElementById('severityChart').getContext('2d');
+  severityChart = new Chart(sctx, {
+    type: 'doughnut',
+    data: {
+      labels: ['🔴 严重', '🟡 警告', '🔵 建议'],
+      datasets: [{
+        data: [critical, warning, info],
+        backgroundColor: ['rgba(248,81,73,0.7)', 'rgba(210,153,34,0.7)', 'rgba(88,166,255,0.7)'],
+        borderColor: ['#f85149', '#d29922', '#58a6ff'],
+        borderWidth: 2,
+        hoverOffset: 8,
+      }]
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
       plugins: {
-        legend: { labels: { color: '#c9d1d9' } }
+        legend: { position: 'bottom', labels: { color: '#c9d1d9', padding: 16 } }
       }
     }
   });
@@ -1327,11 +1715,291 @@ function exportReport(format) {
   }
 }
 
+// ===================== GitHub 集成 =====================
+
+async function loadGithubIntegrations() {
+  try {
+    const res = await fetch('/api/github/config');
+    const data = await res.json();
+    const el = document.getElementById('ghIntegrations');
+    if (!data.length) { el.innerHTML = '<div style="opacity:0.6">暂无配置，请添加仓库</div>'; return; }
+    el.innerHTML = data.map(i => `
+      <div style="display:flex;align-items:center;justify-content:space-between;padding:12px;border:1px solid var(--border);border-radius:8px;margin-bottom:8px;background:var(--bg);">
+        <div>
+          <div style="font-weight:600;color:var(--text);">📦 ${i.repo_full_name}</div>
+          <div style="font-size:12px;color:var(--text-muted);margin-top:4px;">Token: ${i.github_token_masked || '***'} | 自动评论: ${i.auto_comment ? '✅' : '❌'}</div>
+        </div>
+        <button onclick="deleteGithubConfig(${i.id})" style="padding:6px 14px;background:var(--red);color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:12px;">🗑 删除</button>
+      </div>
+    `).join('');
+  } catch (e) { document.getElementById('ghIntegrations').innerHTML = '加载失败'; }
+}
+
+async function loadGithubReviews() {
+  try {
+    const res = await fetch('/api/github/reviews?limit=20');
+    const data = await res.json();
+    const el = document.getElementById('ghReviews');
+    if (!data.length) { el.innerHTML = '<div style="opacity:0.6">暂无审查记录</div>'; return; }
+    const statusIcon = { pending: '⏳', running: '🔄', completed: '✅', failed: '❌' };
+    el.innerHTML = `<table style="width:100%;border-collapse:collapse;font-size:13px;">
+      <tr style="color:var(--text-muted);border-bottom:1px solid var(--border);"><th style="padding:8px;text-align:left;">仓库</th><th style="padding:8px;">PR#</th><th style="padding:8px;">评分</th><th style="padding:8px;">状态</th><th style="padding:8px;">时间</th></tr>
+      ${data.map(r => `<tr style="border-bottom:1px solid var(--border);">
+        <td style="padding:8px;">${r.integration_id}</td>
+        <td style="padding:8px;text-align:center;">#${r.pr_number}</td>
+        <td style="padding:8px;text-align:center;color:${scoreColor(r.total_score || 0)};">${r.total_score ? r.total_score.toFixed(1) : '-'}</td>
+        <td style="padding:8px;text-align:center;">${statusIcon[r.status] || r.status}</td>
+        <td style="padding:8px;text-align:center;color:var(--text-muted);">${(r.created_at || '').substring(5, 16)}</td>
+      </tr>`).join('')}
+    </table>`;
+  } catch (e) { document.getElementById('ghReviews').innerHTML = '加载失败'; }
+}
+
+async function saveGithubConfig() {
+  const repo = document.getElementById('ghRepo').value.trim();
+  const secret = document.getElementById('ghSecret').value.trim();
+  const token = document.getElementById('ghToken').value.trim();
+  if (!repo || !secret || !token) { alert('请填写所有字段'); return; }
+  try {
+    const res = await fetch('/api/github/config', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ repo_full_name: repo, webhook_secret: secret, github_token: token, auto_comment: true })
+    });
+    const data = await res.json();
+    if (res.ok) {
+      alert('✅ 配置已保存！请前往 GitHub 添加 Webhook。');
+      document.getElementById('ghRepo').value = '';
+      document.getElementById('ghSecret').value = '';
+      document.getElementById('ghToken').value = '';
+      loadGithubIntegrations();
+    } else { alert('❌ ' + (data.error || '保存失败')); }
+  } catch (e) { alert('请求失败: ' + e.message); }
+}
+
+async function deleteGithubConfig(id) {
+  if (!confirm('确定删除此配置？')) return;
+  try {
+    const res = await fetch(`/api/github/config/${id}`, { method: 'DELETE' });
+    if (res.ok) { loadGithubIntegrations(); }
+    else { alert('删除失败'); }
+  } catch (e) { alert('请求失败'); }
+}
+
+async function testGithubConn() {
+  const token = document.getElementById('ghToken').value.trim();
+  const repo = document.getElementById('ghRepo').value.trim();
+  if (!token) { alert('请先填写 Token'); return; }
+  const el = document.getElementById('ghTestResult');
+  el.innerHTML = '⏳ 测试中...';
+  try {
+    const res = await fetch('/api/github/test', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ github_token: token, repo_full_name: repo })
+    });
+    const data = await res.json();
+    if (data.ok) {
+      el.innerHTML = `✅ 连接成功！用户: ${data.user}${data.repo ? ' | 仓库: ' + data.repo.name : ''}`;
+      el.style.color = '#3fb950';
+    } else { el.innerHTML = '❌ ' + (data.error || '失败'); el.style.color = '#f85149'; }
+  } catch (e) { el.innerHTML = '❌ 请求失败'; el.style.color = '#f85149'; }
+}
+
+// ===================== 规则配置 =====================
+
+async function loadRules() {
+  try {
+    const res = await fetch('/api/rules');
+    const data = await res.json();
+    const el = document.getElementById('rulesList');
+    if (!data.length) { el.innerHTML = '<div style="opacity:0.6">暂无规则，请添加</div>'; return; }
+    const sevIcon = { critical: '🔴', warning: '🟡', info: '🔵' };
+    const dimLabel = { maintainability: '可维护性', reliability: '可靠性', security: '安全性', performance: '性能', readability: '可读性', complexity: '复杂度' };
+    el.innerHTML = data.map(r => `
+      <div style="display:flex;align-items:center;justify-content:space-between;padding:12px;border:1px solid var(--border);border-radius:8px;margin-bottom:8px;background:var(--bg);gap:12px;${r.enabled ? '' : 'opacity:0.5;'}">
+        <div style="flex:1;">
+          <div style="display:flex;align-items:center;gap:8px;">
+            <span>${sevIcon[r.severity] || '⚪'}</span>
+            <span style="font-weight:600;color:var(--text);">${r.name}</span>
+            <span style="font-size:11px;background:var(--surface);padding:2px 8px;border-radius:4px;color:var(--text-muted);">${dimLabel[r.dimension] || r.dimension}</span>
+            ${r.pattern ? `<code style="font-size:11px;background:var(--surface);padding:2px 6px;border-radius:3px;color:var(--accent);">${r.pattern}</code>` : ''}
+          </div>
+          ${r.description ? `<div style="font-size:12px;color:var(--text-muted);margin-top:4px;">${r.description}</div>` : ''}
+        </div>
+        <div style="display:flex;align-items:center;gap:10px;">
+          <div style="display:flex;align-items:center;gap:4px;font-size:12px;color:var(--text-muted);">
+            <span>权重</span>
+            <input type="range" min="0" max="3" step="0.1" value="${r.weight}" onchange="updateRuleWeight(${r.id}, this.value)" style="width:60px;accent-color:var(--accent);" />
+            <span id="ruleW${r.id}">${r.weight}</span>
+          </div>
+          <button onclick="toggleRule(${r.id}, ${r.enabled ? 'false' : 'true'})" style="padding:4px 10px;font-size:12px;border:1px solid var(--border);border-radius:6px;cursor:pointer;background:${r.enabled ? 'var(--green)' : 'var(--surface)'};color:${r.enabled ? '#fff' : 'var(--text-muted)'};">${r.enabled ? '✅ 启用' : '⏸ 禁用'}</button>
+          <button onclick="deleteRuleConfirm(${r.id})" style="padding:4px 10px;font-size:12px;background:transparent;border:1px solid var(--red);border-radius:6px;color:var(--red);cursor:pointer;">🗑</button>
+        </div>
+      </div>
+    `).join('');
+  } catch (e) { document.getElementById('rulesList').innerHTML = '加载失败'; }
+}
+
+async function createRule() {
+  const name = document.getElementById('ruleName').value.trim();
+  const dimension = document.getElementById('ruleDimension').value;
+  const pattern = document.getElementById('rulePattern').value.trim();
+  const severity = document.getElementById('ruleSeverity').value;
+  const description = document.getElementById('ruleDesc').value.trim();
+  if (!name) { alert('请填写规则名称'); return; }
+  try {
+    const res = await fetch('/api/rules', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name, dimension, pattern, severity, description })
+    });
+    const data = await res.json();
+    if (res.ok) {
+      document.getElementById('ruleName').value = '';
+      document.getElementById('rulePattern').value = '';
+      document.getElementById('ruleDesc').value = '';
+      loadRules();
+    } else { alert('❌ ' + (data.error || '创建失败')); }
+  } catch (e) { alert('请求失败'); }
+}
+
+async function toggleRule(id, enabled) {
+  await fetch(`/api/rules/${id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ enabled }) });
+  loadRules();
+}
+
+async function updateRuleWeight(id, weight) {
+  document.getElementById('ruleW' + id).textContent = parseFloat(weight).toFixed(1);
+  await fetch(`/api/rules/${id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ weight: parseFloat(weight) }) });
+}
+
+async function deleteRuleConfirm(id) {
+  if (!confirm('确定删除此规则？')) return;
+  await fetch(`/api/rules/${id}`, { method: 'DELETE' });
+  loadRules();
+}
+
+// ===================== 多项目对比 =====================
+
+function toggleProjectPicker() {
+  const el = document.getElementById('projectPicker');
+  el.style.display = el.style.display === 'none' ? '' : 'none';
+}
+
+function renderProjectPicker(records) {
+  // 提取去重项目
+  const projects = [...new Set(records.map(r => r.project_path))];
+  if (!projects.length) return;
+  // 默认全选
+  if (!selectedProjects.size) projects.forEach(p => selectedProjects.add(p));
+  const el = document.getElementById('projectPicker');
+  el.innerHTML = projects.map(p => {
+    const short = p.split('/').pop();
+    const checked = selectedProjects.has(p) ? 'checked' : '';
+    return `<label style="display:flex;align-items:center;gap:6px;padding:4px 8px;font-size:13px;color:var(--text);cursor:pointer;">
+      <input type="checkbox" ${checked} onchange="onProjectToggle('${p}', this.checked)" style="accent-color:var(--accent);"/> ${short} <span style="color:var(--text-muted);font-size:11px;">${p}</span>
+    </label>`;
+  }).join('');
+}
+
+function onProjectToggle(path, checked) {
+  if (checked) selectedProjects.add(path); else selectedProjects.delete(path);
+  renderCompareCharts(allHistoryRecords);
+}
+
+function renderCompareCharts(records) {
+  const filtered = records.filter(r => selectedProjects.has(r.project_path));
+  if (!filtered.length) return;
+
+  // 按项目分组
+  const groups = {};
+  filtered.forEach(r => {
+    const name = r.project_path.split('/').pop();
+    if (!groups[name]) groups[name] = [];
+    groups[name].push(r);
+  });
+
+  // 横向柱状图：每个项目最新评分
+  const names = Object.keys(groups);
+  const latestScores = names.map(n => {
+    const recs = groups[n];
+    return recs[0].total_score; // 已按时间倒序
+  });
+  const avgScores = names.map(n => {
+    const recs = groups[n];
+    return recs.reduce((s, r) => s + r.total_score, 0) / recs.length;
+  });
+
+  const barCtx = document.getElementById('compareBarChart').getContext('2d');
+  if (compareBarChart) compareBarChart.destroy();
+  compareBarChart = new Chart(barCtx, {
+    type: 'bar',
+    data: {
+      labels: names.map(n => n.length > 15 ? n.substring(0, 15) + '…' : n),
+      datasets: [
+        { label: '最新评分', data: latestScores, backgroundColor: latestScores.map(s => s >= 80 ? 'rgba(63,185,80,0.6)' : s >= 60 ? 'rgba(210,153,34,0.6)' : 'rgba(248,81,73,0.6)'), borderRadius: 4 },
+        { label: '平均评分', data: avgScores, backgroundColor: 'rgba(88,166,255,0.4)', borderRadius: 4 }
+      ]
+    },
+    options: {
+      indexAxis: 'y', responsive: true, maintainAspectRatio: false,
+      scales: { x: { beginAtZero: true, max: 100, grid: { color: '#30363d' }, ticks: { color: '#8b949e' } }, y: { grid: { display: false }, ticks: { color: '#c9d1d9', font: { size: 11 } } } },
+      plugins: { legend: { labels: { color: '#c9d1d9' } } }
+    }
+  });
+
+  // 趋势叠加折线图
+  const colors = ['#58a6ff', '#3fb950', '#f85149', '#d29922', '#bc8cff', '#f778ba'];
+  const trendCtx = document.getElementById('compareTrendChart').getContext('2d');
+  if (compareTrendChart) compareTrendChart.destroy();
+  const datasets = names.map((n, i) => {
+    const recs = groups[n].reverse(); // 按时间正序
+    return {
+      label: n.length > 12 ? n.substring(0, 12) + '…' : n,
+      data: recs.map(r => ({ x: r.created_at, y: r.total_score })),
+      borderColor: colors[i % colors.length],
+      backgroundColor: 'transparent',
+      tension: 0.3,
+      pointRadius: 3,
+      borderWidth: 2,
+    };
+  });
+  compareTrendChart = new Chart(trendCtx, {
+    type: 'line',
+    data: { datasets },
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      scales: { y: { beginAtZero: true, max: 100, grid: { color: '#30363d' }, ticks: { color: '#8b949e' } }, x: { type: 'category', grid: { color: '#30363d' }, ticks: { color: '#8b949e', maxRotation: 45, font: { size: 10 } } } },
+      plugins: { legend: { labels: { color: '#c9d1d9', font: { size: 11 } } } }
+    }
+  });
+
+  // 对比表格
+  const tableEl = document.getElementById('compareTable');
+  tableEl.innerHTML = `<table style="width:100%;border-collapse:collapse;font-size:13px;">
+    <tr style="color:var(--text-muted);border-bottom:1px solid var(--border);">
+      <th style="padding:8px;text-align:left;">项目</th><th style="padding:8px;">最新分</th><th style="padding:8px;">平均分</th><th style="padding:8px;">分析次数</th><th style="padding:8px;">趋势</th>
+    </tr>
+    ${names.map(n => {
+      const recs = groups[n];
+      const latest = recs[0].total_score;
+      const avg = (recs.reduce((s, r) => s + r.total_score, 0) / recs.length).toFixed(1);
+      const trend = recs.length >= 2 ? (latest - recs[1].total_score) : 0;
+      const trendIcon = trend > 1 ? '📈' : trend < -1 ? '📉' : '➡️';
+      return `<tr style="border-bottom:1px solid var(--border);">
+        <td style="padding:8px;">${n}</td>
+        <td style="padding:8px;text-align:center;color:${scoreColor(latest)};">${latest.toFixed(1)}</td>
+        <td style="padding:8px;text-align:center;">${avg}</td>
+        <td style="padding:8px;text-align:center;">${recs.length}</td>
+        <td style="padding:8px;text-align:center;">${trendIcon} ${trend > 0 ? '+' : ''}${trend.toFixed(1)}</td>
+      </tr>`;
+    }).join('')}
+  </table>`;
+}
+
 // Initialize on load
-document.addEventListener('DOMContentLoaded', () => {
+ document.addEventListener('DOMContentLoaded', () => {
   onModeChange();
   checkLlmStatus();
-});
+ });
 </script>
 </body>
 </html>

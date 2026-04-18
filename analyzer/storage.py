@@ -56,6 +56,40 @@ def init_db():
                 description TEXT,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             );
+
+            CREATE TABLE IF NOT EXISTS github_integrations (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                repo_full_name TEXT NOT NULL UNIQUE,
+                webhook_secret TEXT NOT NULL,
+                github_token TEXT NOT NULL,
+                auto_comment INTEGER DEFAULT 1,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+
+            CREATE TABLE IF NOT EXISTS pr_reviews (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                integration_id INTEGER,
+                pr_number INTEGER NOT NULL,
+                commit_sha TEXT NOT NULL,
+                total_score REAL,
+                comment_id INTEGER,
+                status TEXT DEFAULT 'pending',
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (integration_id) REFERENCES github_integrations(id)
+            );
+            CREATE INDEX IF NOT EXISTS idx_pr_reviews_integration ON pr_reviews(integration_id);
+
+            CREATE TABLE IF NOT EXISTS rules (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL,
+                dimension TEXT NOT NULL,
+                severity TEXT DEFAULT 'warning',
+                pattern TEXT,
+                description TEXT,
+                enabled INTEGER DEFAULT 1,
+                weight REAL DEFAULT 1.0,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
         """)
         conn.commit()
     finally:
@@ -238,5 +272,240 @@ def list_webhooks() -> List[Dict[str, Any]]:
     try:
         rows = conn.execute("SELECT id, url, description, created_at FROM webhooks").fetchall()
         return [dict(r) for r in rows]
+    finally:
+        conn.close()
+
+
+# GitHub 集成持久化
+def save_integration(repo_full_name: str, webhook_secret: str, github_token: str, auto_comment: bool = True) -> int:
+    """保存或更新 GitHub 集成配置，返回记录 ID。"""
+    init_db()
+    conn = _get_conn()
+    try:
+        existing = conn.execute(
+            "SELECT id FROM github_integrations WHERE repo_full_name = ?",
+            (repo_full_name,)
+        ).fetchone()
+        if existing:
+            conn.execute(
+                "UPDATE github_integrations SET webhook_secret = ?, github_token = ?, auto_comment = ? WHERE repo_full_name = ?",
+                (webhook_secret, github_token, 1 if auto_comment else 0, repo_full_name)
+            )
+            conn.commit()
+            return existing['id']
+        else:
+            cursor = conn.execute(
+                "INSERT INTO github_integrations (repo_full_name, webhook_secret, github_token, auto_comment) VALUES (?, ?, ?, ?)",
+                (repo_full_name, webhook_secret, github_token, 1 if auto_comment else 0)
+            )
+            conn.commit()
+            return cursor.lastrowid
+    finally:
+        conn.close()
+
+
+def get_integration(repo_full_name: str) -> Optional[Dict[str, Any]]:
+    """获取指定仓库的集成配置。"""
+    init_db()
+    conn = _get_conn()
+    try:
+        row = conn.execute(
+            "SELECT id, repo_full_name, webhook_secret, github_token, auto_comment, created_at FROM github_integrations WHERE repo_full_name = ?",
+            (repo_full_name,)
+        ).fetchone()
+        return dict(row) if row else None
+    finally:
+        conn.close()
+
+
+def get_integration_by_id(integration_id: int) -> Optional[Dict[str, Any]]:
+    """根据 ID 获取集成配置。"""
+    init_db()
+    conn = _get_conn()
+    try:
+        row = conn.execute(
+            "SELECT id, repo_full_name, webhook_secret, github_token, auto_comment, created_at FROM github_integrations WHERE id = ?",
+            (integration_id,)
+        ).fetchone()
+        return dict(row) if row else None
+    finally:
+        conn.close()
+
+
+def list_integrations() -> List[Dict[str, Any]]:
+    """列出所有集成配置（token 脱敏）。"""
+    init_db()
+    conn = _get_conn()
+    try:
+        rows = conn.execute(
+            "SELECT id, repo_full_name, webhook_secret, github_token, auto_comment, created_at FROM github_integrations ORDER BY created_at DESC"
+        ).fetchall()
+        result = []
+        for r in rows:
+            d = dict(r)
+            # 脱敏 token
+            if d.get('github_token'):
+                d['github_token_masked'] = d['github_token'][:8] + '...' + d['github_token'][-4:]
+            else:
+                d['github_token_masked'] = ''
+            del d['github_token']
+            result.append(d)
+        return result
+    finally:
+        conn.close()
+
+
+def delete_integration(integration_id: int) -> bool:
+    """删除集成配置。"""
+    init_db()
+    conn = _get_conn()
+    try:
+        cursor = conn.execute("DELETE FROM github_integrations WHERE id = ?", (integration_id,))
+        conn.commit()
+        return cursor.rowcount > 0
+    finally:
+        conn.close()
+
+
+def save_pr_review(integration_id: int, pr_number: int, commit_sha: str,
+                   total_score: float = None, comment_id: int = None,
+                   status: str = 'pending') -> int:
+    """保存 PR 审查记录，返回记录 ID。"""
+    init_db()
+    conn = _get_conn()
+    try:
+        cursor = conn.execute(
+            "INSERT INTO pr_reviews (integration_id, pr_number, commit_sha, total_score, comment_id, status) VALUES (?, ?, ?, ?, ?, ?)",
+            (integration_id, pr_number, commit_sha, total_score, comment_id, status)
+        )
+        conn.commit()
+        return cursor.lastrowid
+    finally:
+        conn.close()
+
+
+def update_pr_review_status(review_id: int, status: str, total_score: float = None, comment_id: int = None):
+    """更新 PR 审查状态。"""
+    init_db()
+    conn = _get_conn()
+    try:
+        sets = ["status = ?"]
+        params = [status]
+        if total_score is not None:
+            sets.append("total_score = ?")
+            params.append(total_score)
+        if comment_id is not None:
+            sets.append("comment_id = ?")
+            params.append(comment_id)
+        params.append(review_id)
+        conn.execute(f"UPDATE pr_reviews SET {', '.join(sets)} WHERE id = ?", params)
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def list_pr_reviews(integration_id: int = None, limit: int = 50) -> List[Dict[str, Any]]:
+    """列出 PR 审查记录。"""
+    init_db()
+    conn = _get_conn()
+    try:
+        if integration_id:
+            rows = conn.execute(
+                "SELECT id, integration_id, pr_number, commit_sha, total_score, comment_id, status, created_at FROM pr_reviews WHERE integration_id = ? ORDER BY created_at DESC LIMIT ?",
+                (integration_id, limit)
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT id, integration_id, pr_number, commit_sha, total_score, comment_id, status, created_at FROM pr_reviews ORDER BY created_at DESC LIMIT ?",
+                (limit,)
+            ).fetchall()
+        return [dict(r) for r in rows]
+    finally:
+        conn.close()
+
+
+# 自定义规则持久化
+def save_rule(name: str, dimension: str, severity: str = 'warning',
+              pattern: str = None, description: str = None,
+              enabled: bool = True, weight: float = 1.0) -> int:
+    """保存自定义规则，返回规则 ID。"""
+    init_db()
+    conn = _get_conn()
+    try:
+        cursor = conn.execute(
+            "INSERT INTO rules (name, dimension, severity, pattern, description, enabled, weight) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (name, dimension, severity, pattern, description, 1 if enabled else 0, weight)
+        )
+        conn.commit()
+        return cursor.lastrowid
+    finally:
+        conn.close()
+
+
+def list_rules(dimension: str = None) -> list:
+    """列出所有规则，可按维度过滤。"""
+    init_db()
+    conn = _get_conn()
+    try:
+        if dimension:
+            rows = conn.execute(
+                "SELECT id, name, dimension, severity, pattern, description, enabled, weight, created_at FROM rules WHERE dimension = ? ORDER BY id",
+                (dimension,)
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT id, name, dimension, severity, pattern, description, enabled, weight, created_at FROM rules ORDER BY dimension, id"
+            ).fetchall()
+        return [dict(r) for r in rows]
+    finally:
+        conn.close()
+
+
+def update_rule(rule_id: int, **kwargs) -> bool:
+    """更新规则字段（enabled, weight, severity, name, pattern, description）。"""
+    init_db()
+    conn = _get_conn()
+    try:
+        allowed = {'name', 'dimension', 'severity', 'pattern', 'description', 'enabled', 'weight'}
+        sets = []
+        params = []
+        for k, v in kwargs.items():
+            if k in allowed:
+                sets.append(f"{k} = ?")
+                if k == 'enabled':
+                    params.append(1 if v else 0)
+                else:
+                    params.append(v)
+        if not sets:
+            return False
+        params.append(rule_id)
+        cursor = conn.execute(f"UPDATE rules SET {', '.join(sets)} WHERE id = ?", params)
+        conn.commit()
+        return cursor.rowcount > 0
+    finally:
+        conn.close()
+
+
+def delete_rule(rule_id: int) -> bool:
+    """删除规则。"""
+    init_db()
+    conn = _get_conn()
+    try:
+        cursor = conn.execute("DELETE FROM rules WHERE id = ?", (rule_id,))
+        conn.commit()
+        return cursor.rowcount > 0
+    finally:
+        conn.close()
+
+
+def get_dimension_weights() -> dict:
+    """获取所有维度的权重（用于分析时覆盖默认值）。"""
+    init_db()
+    conn = _get_conn()
+    try:
+        rows = conn.execute(
+            "SELECT dimension, MAX(weight) as weight FROM rules WHERE enabled = 1 AND weight != 1.0 GROUP BY dimension"
+        ).fetchall()
+        return {r['dimension']: r['weight'] for r in rows}
     finally:
         conn.close()
