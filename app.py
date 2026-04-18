@@ -116,24 +116,158 @@ def _extract_json_text(raw: str) -> str:
 
 
 def _parse_llm_json(raw: str):
-    """优先直接解析 JSON，失败时再提取首个完整 JSON 对象。"""
-    json_text = (raw or '').strip()
-    if not json_text:
+    """优先直接解析 JSON，失败时逐步增强容错。
+
+    策略链：
+    1. 直接解析
+    2. 去外层代码块包裹后解析
+    3. 清理嵌套代码块标记 + 修复裸换行后解析
+    4. 最终 fallback：正则提取字段
+    """
+    text = (raw or '').strip()
+    if not text:
         return None
 
+    # 1. 直接解析
     try:
-        return json.loads(json_text)
+        return json.loads(text)
     except (TypeError, json.JSONDecodeError):
         pass
 
-    extracted = _extract_json_text(json_text)
-    if extracted == json_text:
-        return None
+    # 2. 去外层代码块包裹
+    if text.startswith('```'):
+        unwrapped = re.sub(r'^```[\w]*\n?', '', text)
+        unwrapped = re.sub(r'\n?```\s*$', '', unwrapped)
+        try:
+            return json.loads(unwrapped)
+        except (TypeError, json.JSONDecodeError):
+            text = unwrapped
 
+    # 3. 清理嵌套代码块 + 修复裸换行
+    cleaned = _fix_newlines_in_json_strings(_clean_json_code_blocks(text))
     try:
-        return json.loads(extracted)
+        return json.loads(cleaned)
     except (TypeError, json.JSONDecodeError):
-        return None
+        pass
+
+    # 4. 只修复裸换行（不清理代码块）
+    fixed_nl = _fix_newlines_in_json_strings(text)
+    try:
+        return json.loads(fixed_nl)
+    except (TypeError, json.JSONDecodeError):
+        pass
+
+    # 5. 最终 fallback
+    return _extract_fields_from_text(text)
+
+
+def _clean_json_code_blocks(text: str) -> str:
+    """清理 JSON 字符串值中嵌套的 ```lang\n...``` 标记。
+
+    逐字符扫描 JSON，在字符串值内检测 ``` 标记并提取纯代码。
+    处理 GLM 等模型在 fixed_code 字段里返回代码块的情况。
+    """
+    result = []
+    in_string = False
+    escaped = False
+    i = 0
+    while i < len(text):
+        char = text[i]
+        if escaped:
+            result.append(char)
+            escaped = False
+            i += 1
+            continue
+        if char == '\\':
+            result.append(char)
+            escaped = True
+            i += 1
+            continue
+        if char == '"':
+            in_string = not in_string
+            result.append(char)
+            i += 1
+            continue
+        # 在字符串内检测 ``` 标记
+        if in_string and text[i:i+3] == '```':
+            j = i + 3
+            # 跳过语言标记 (python, javascript 等)
+            while j < len(text) and text[j].isalpha():
+                j += 1
+            # 跳过换行
+            if j < len(text) and text[j] == '\n':
+                j += 1
+            # 找到结尾的 ```
+            end = text.find('```', j)
+            if end != -1:
+                code = text[j:end]
+                if code.endswith('\n'):
+                    code = code[:-1]
+                # 转义后写入
+                result.append(code.replace('\\', '\\\\').replace('"', '\\"').replace('\n', '\\n'))
+                i = end + 3
+                continue
+        result.append(char)
+        i += 1
+    return ''.join(result)
+
+
+def _fix_newlines_in_json_strings(text: str) -> str:
+    """修复 JSON 字符串值中的裸换行符（替换为 \\n）。
+
+    GLM 等模型有时在 JSON 字符串值中直接写入换行符而不是 \\n。
+    """
+    result = []
+    in_string = False
+    escaped = False
+    for char in text:
+        if escaped:
+            result.append(char)
+            escaped = False
+            continue
+        if char == '\\':
+            result.append(char)
+            escaped = True
+            continue
+        if char == '"':
+            in_string = not in_string
+            result.append(char)
+            continue
+        if in_string and char == '\n':
+            result.append('\\n')
+            continue
+        if in_string and char == '\t':
+            result.append('\\t')
+            continue
+        result.append(char)
+    return ''.join(result)
+
+
+def _extract_fields_from_text(text: str) -> dict:
+    """从 LLM 返回的纯文本中提取修复建议字段（最终 fallback）。"""
+    result = {'analysis': '', 'fix_description': '', 'fixed_code': ''}
+
+    for field in ['analysis', 'fix_description']:
+        match = re.search(
+            rf'"{field}"\s*:\s*"([^"]*(?:"[^,\n][^"]*)*?)"',
+            text
+        )
+        if match:
+            result[field] = match.group(1).replace('\\n', '\n').replace('\\"', '"')
+
+    # fixed_code 可能包含代码块
+    code_blocks = re.findall(r'```[\w]*\n([\s\S]*?)\n```', text)
+    if code_blocks:
+        result['fixed_code'] = code_blocks[-1].strip()
+
+    if not result['analysis']:
+        for line in text.split('\n'):
+            line = line.strip()
+            if line and not line.startswith('{') and not line.startswith('```') and not line.startswith('"'):
+                result['analysis'] = line[:200]
+                break
+
+    return result if any(result.values()) else None
 
 
 def _handle_mode_params(data, project_path, language, analyzer):
