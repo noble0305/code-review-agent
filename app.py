@@ -1534,13 +1534,40 @@ def api_test_plan():
     data = request.get_json()
     project_path = data.get('path', '').strip()
     language = data.get('language', '').strip().lower() or detect_language(project_path)
+    mode = data.get('mode', 'full')
+    base = data.get('base', 'HEAD~1')
+    head = data.get('head', 'HEAD')
 
     if not project_path:
         return jsonify({'error': '请输入项目目录路径'}), 400
     if not os.path.isdir(project_path):
         return jsonify({'error': f'目录不存在: {project_path}'}), 400
 
-    plan = test_engine.generate_plan(project_path, language)
+    # diff 模式：仅对变更文件生成测试
+    target_path = project_path
+    if mode in ('diff', 'diff-custom'):
+        file_list = get_changed_files(project_path, base, head)
+        if file_list is None:
+            return jsonify({'error': '不是 Git 仓库，无法使用提交对比'}), 400
+        if not file_list:
+            return jsonify({'error': '选定范围内没有变更文件'}), 400
+        # 过滤出源码文件
+        ext_map = {
+            'python': {'.py'}, 'javascript': {'.js', '.ts', '.jsx', '.tsx'},
+            'go': {'.go'}, 'java': {'.java'}, 'c_cpp': {'.c', '.cpp', '.h', '.hpp'},
+            'rust': {'.rs'}, 'php': {'.php'}, 'ruby': {'.rb'}, 'swift': {'.swift'},
+            'kotlin': {'.kt'}, 'csharp': {'.cs'}
+        }
+        lang_exts = ext_map.get(language, set())
+        if lang_exts:
+            file_list = [f for f in file_list if any(f.endswith(e) for e in lang_exts)]
+        if not file_list:
+            return jsonify({'error': '选定范围内没有该语言的变更文件'}), 400
+        # 传递变更文件列表给 test_engine
+        plan = test_engine.generate_plan(project_path, language, changed_files=file_list)
+    else:
+        plan = test_engine.generate_plan(project_path, language)
+
     if 'error' in plan:
         return jsonify({'error': plan['error']}), 400
 

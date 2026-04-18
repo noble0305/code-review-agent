@@ -428,8 +428,12 @@ button:disabled { background: var(--surface); color: var(--text-muted); cursor: 
     }
 
     function selectCurrentFolder() {
-      document.getElementById('projectPath').value = browseCurrentDir;
+      const modal = document.getElementById('folderModal');
+      const targetInput = modal._targetInput || 'projectPath';
+      document.getElementById(targetInput).value = browseCurrentDir;
       closeFolderPicker();
+      // 触发 change 事件
+      document.getElementById(targetInput).dispatchEvent(new Event('change'));
     }
 
     function escapeHtml(s) { return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
@@ -768,7 +772,8 @@ button:disabled { background: var(--surface); color: var(--text-muted); cursor: 
       <!-- 输入区 -->
       <div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:20px;margin-bottom:20px;">
         <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:12px;">
-          <input type="text" id="testProjectPath" placeholder="输入项目目录路径" style="flex:1;min-width:280px;padding:11px 16px;background:var(--bg);border:1px solid var(--border);border-radius:var(--radius-sm);color:var(--text);font-size:14px;outline:none;" />
+          <input type="text" id="testProjectPath" placeholder="输入项目目录路径，或点击 📂 浏览" style="flex:1;min-width:280px;padding:11px 16px;background:var(--bg);border:1px solid var(--border);border-radius:var(--radius-sm);color:var(--text);font-size:14px;outline:none;" />
+          <button onclick="openTestFolderPicker()" title="浏览本地目录" style="padding:10px 14px;background:var(--surface);border:1px solid var(--border);border-radius:6px;color:var(--text);cursor:pointer;font-size:16px;">📂</button>
           <select id="testLanguage" style="padding:11px 16px;background:var(--bg);border:1px solid var(--border);border-radius:var(--radius-sm);color:var(--text);font-size:14px;">
             <option value="">🔍 自动检测</option>
             <option value="python">Python (pytest)</option>
@@ -776,6 +781,27 @@ button:disabled { background: var(--surface); color: var(--text-muted); cursor: 
             <option value="go">Go (go test)</option>
             <option value="java">Java (JUnit)</option>
           </select>
+          <select id="testMode" onchange="onTestModeChange()" style="padding:11px 16px;background:var(--bg);border:1px solid var(--border);border-radius:var(--radius-sm);color:var(--text);font-size:14px;">
+            <option value="full">📊 全量测试</option>
+            <option value="diff">🔀 选择提交测试</option>
+            <option value="diff-custom">🔀 自定义对比测试</option>
+          </select>
+        </div>
+        <!-- Diff 参数行 -->
+        <div id="testDiffParams" style="display:none;padding:4px 0 12px;">
+          <div id="testCommitPicker" style="display:none;margin-bottom:8px;">
+            <div style="font-size:13px;color:var(--text-secondary);margin-bottom:6px;">选择要测试的提交：</div>
+            <div id="testCommitList" style="max-height:240px;overflow-y:auto;border:1px solid var(--border);border-radius:8px;background:var(--surface);">
+              <div style="text-align:center;padding:20px;color:var(--text-secondary);">选择项目目录后自动加载...</div>
+            </div>
+          </div>
+          <div id="testCustomDiffInputs" style="display:none;gap:8px;align-items:center;">
+            <span style="font-size:13px;color:var(--text-secondary);">对比范围：</span>
+            <input type="text" id="testDiffBase" placeholder="基准 (如 HEAD~3)" style="padding:6px 10px;background:var(--surface);border:1px solid var(--border);border-radius:6px;color:var(--text);font-size:13px;width:160px;" value="HEAD~1" />
+            <span style="color:var(--text-secondary);">→</span>
+            <input type="text" id="testDiffHead" placeholder="目标 (如 HEAD)" style="padding:6px 10px;background:var(--surface);border:1px solid var(--border);border-radius:6px;color:var(--text);font-size:13px;width:160px;" value="HEAD" />
+            <span style="font-size:12px;color:var(--text-secondary);margin-left:4px;">仅测试两次提交之间变更的文件</span>
+          </div>
         </div>
         <div style="display:flex;gap:10px;">
           <button onclick="generateTestPlan()" id="btnGenPlan" style="padding:10px 20px;">📋 生成测试计划</button>
@@ -2115,6 +2141,77 @@ function renderCompareCharts(records) {
 // ===== 测试引擎 JS =====
 let currentTestPlan = null;
 
+/* === 测试 Tab: 目录浏览 & 模式切换 === */
+function openTestFolderPicker() {
+  const modal = document.getElementById('folderModal');
+  const currentVal = document.getElementById('testProjectPath').value.trim();
+  browseCurrentDir = currentVal || '/';
+  modal.style.display = 'flex';
+  browseLoadDir(browseCurrentDir);
+  // 点击"选择此目录"时写入 testProjectPath
+  modal._targetInput = 'testProjectPath';
+}
+
+function onTestModeChange() {
+  const mode = document.getElementById('testMode').value;
+  document.getElementById('testDiffParams').style.display = (mode !== 'full') ? '' : 'none';
+  document.getElementById('testCommitPicker').style.display = (mode === 'diff') ? '' : 'none';
+  document.getElementById('testCustomDiffInputs').style.display = (mode === 'diff-custom') ? 'flex' : 'none';
+  if (mode === 'diff') loadTestCommits();
+}
+
+async function loadTestCommits() {
+  const path = document.getElementById('testProjectPath').value.trim();
+  if (!path) return;
+  try {
+    const resp = await fetch('/api/git/commits?project_path=' + encodeURIComponent(path) + '&limit=20');
+    const data = await resp.json();
+    const list = document.getElementById('testCommitList');
+    if (!data.commits || !data.commits.length) {
+      list.innerHTML = '<div style="text-align:center;padding:20px;color:var(--text-secondary);">无提交记录</div>';
+      return;
+    }
+    list.innerHTML = data.commits.map((c, i) => 
+      '<div onclick="selectTestCommit('+i+')" data-sha="'+c.sha+'" style="padding:10px 14px;border-bottom:1px solid var(--border);cursor:pointer;display:flex;align-items:center;gap:10px;font-size:13px;'+(i===0?'background:var(--accent-bg);':'')+'">' +
+      '<div style="flex:1;overflow:hidden;">' +
+      '<div style="font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">'+c.message.split('\n')[0]+'</div>' +
+      '<div style="font-size:11px;color:var(--text-secondary);margin-top:2px;">'+c.sha.substring(0,7)+' · '+c.author+' · '+c.date+'</div>' +
+      '</div></div>'
+    ).join('');
+  } catch(e) {
+    document.getElementById('testCommitList').innerHTML = '<div style="text-align:center;padding:20px;color:var(--red);">加载失败</div>';
+  }
+}
+
+function selectTestCommit(index) {
+  const items = document.getElementById('testCommitList').children;
+  for (let el of items) el.style.background = '';
+  items[index].style.background = 'var(--accent-bg)';
+  const sha = items[index].dataset.sha;
+  document.getElementById('testDiffBase').value = sha + '~1';
+  document.getElementById('testDiffHead').value = sha;
+}
+
+// 路径变化时自动加载提交
+const _origTestPathInput = document.getElementById('testProjectPath');
+_origTestPathInput.addEventListener('change', function() {
+  if (document.getElementById('testMode').value === 'diff') loadTestCommits();
+});
+
+/* === 修复 selectCurrentFolder 让它支持测试 Tab === */
+const _origSelectCurrentFolder = typeof selectCurrentFolder === 'function' ? selectCurrentFolder : null;
+
+/* === 测试 API 调用 === */
+function getTestDiffParams() {
+  const mode = document.getElementById('testMode').value;
+  if (mode === 'full') return {};
+  return {
+    mode: mode,
+    base: document.getElementById('testDiffBase').value || 'HEAD~1',
+    head: document.getElementById('testDiffHead').value || 'HEAD'
+  };
+}
+
 async function generateTestPlan() {
   const path = document.getElementById('testProjectPath').value.trim();
   const lang = document.getElementById('testLanguage').value;
@@ -2124,9 +2221,10 @@ async function generateTestPlan() {
   btn.disabled = true; btn.textContent = '⏳ 生成中...';
 
   try {
+    const diffParams = getTestDiffParams();
     const res = await fetch('/api/test/plan', {
       method: 'POST', headers: {'Content-Type':'application/json'},
-      body: JSON.stringify({path, language: lang})
+      body: JSON.stringify({path, language: lang, ...diffParams})
     });
     const data = await res.json();
     if (data.error) { alert(data.error); return; }
@@ -2172,9 +2270,10 @@ async function runAutoFix() {
   btn.disabled = true; btn.textContent = '⏳ 测试+修复中...';
 
   try {
+    const diffParams = getTestDiffParams();
     const res = await fetch('/api/test/auto-fix', {
       method: 'POST', headers: {'Content-Type':'application/json'},
-      body: JSON.stringify({path, language: lang, max_rounds: 3})
+      body: JSON.stringify({path, language: lang, max_rounds: 3, ...diffParams})
     });
     const data = await res.json();
     if (data.error) { alert(data.error); return; }

@@ -22,14 +22,27 @@ class TestEngine:
 
     # ===== Phase 1: 测试计划生成 =====
 
-    def generate_plan(self, project_path: str, language: str) -> Dict:
-        """扫描项目，生成测试计划。"""
+    def generate_plan(self, project_path: str, language: str, changed_files: List[str] = None) -> Dict:
+        """扫描项目，生成测试计划。
+        
+        Args:
+            changed_files: 如果指定，仅对这些文件生成测试（diff 模式）
+        """
         fw = self.FRAMEWORKS.get(language)
         if not fw:
             return {'error': f'不支持的语言: {language}'}
 
         # 收集源码文件
-        source_files = self._collect_source_files(project_path, language)
+        if changed_files:
+            # diff 模式：只分析变更文件
+            source_files = []
+            for cf in changed_files:
+                full_path = os.path.join(project_path, cf) if not os.path.isabs(cf) else cf
+                if os.path.isfile(full_path):
+                    source_files.append(full_path)
+        else:
+            source_files = self._collect_source_files(project_path, language)
+        
         if not source_files:
             return {'error': '未找到源码文件'}
 
